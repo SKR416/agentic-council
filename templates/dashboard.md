@@ -4,23 +4,27 @@
 
 ## 產生方式
 
-儀表板一律由固定範本 `templates/dashboard.html` 產生。主 Agent 只填資料，不設計頁面：
+儀表板一律由固定範本 `templates/dashboard.html` 經腳本產生。主 Agent 只寫資料，不設計頁面，也不手動編輯 HTML：
 
-1. 把 `templates/dashboard.html` 複製到**本次執行資料夾**：`<執行資料夾>/plan_preview.html`。
-   不得寫到 `.tmp/plan_preview.html` 之類的固定路徑，否則下一次執行會覆蓋上一次的結果。
-2. 只替換 `<!-- COUNCIL-DATA:BEGIN -->` 與 `<!-- COUNCIL-DATA:END -->` 之間的 JSON。
-   範本的 CSS、JS 與其餘 HTML 一律不得修改、增刪或「順手改善」。
-3. 寫入後以 `python -c` 或同等方式抽出該段 JSON 做一次解析，確認格式正確。
+1. 把要呈現的內容寫進 `<執行資料夾>/dashboard_input.json`（格式見下方「資料欄位」）。
+2. 執行：
+   ```
+   python <skill 資料夾>/scripts/build_dashboard.py --skill-dir <skill 資料夾> --run-dir <執行資料夾>
+   ```
+   腳本會讀取同一資料夾的 `audit.json`，產生 `<執行資料夾>/plan_preview.html`。
+   不得改寫到 `.tmp/plan_preview.html` 之類的固定路徑，否則下一次執行會覆蓋上一次的結果。
+3. 腳本報錯時依訊息修正 `dashboard_input.json` 後重跑，不得改用手動複製範本、自行填入的方式。
 
-原因：範本固定，每次產出的版面、配色與圖表畫法才會一致；評分的呈現方式也由範本決定，主 Agent 無法透過版面設計放大或淡化某一席的意見。
+原因：範本固定，每次產出的版面、配色與圖表畫法才會一致；評分的呈現方式也由範本決定，主 Agent 無法透過版面設計放大或淡化某一席的意見。評分資料由腳本直接從 `audit.json` 帶入，主 Agent 沒有轉抄的機會。報告內容可能含有來自網路的文字，腳本會跳脫其中的 `<`、`>`、`&`，手動填入無法保證這一點。
+
+無法執行 Python 時（步驟 0.5 的檢查未通過），不產生儀表板，並告知使用者原因。
 
 ## 資料欄位
 
-JSON 結構與範例以範本內建的範例資料為準，填寫規則如下：
+`dashboard_input.json` 只有 `meta` 與 `synthesis` 兩個物件，欄位以範本內建的範例資料為準：
 
-- `meta.is_sample` 設為 `false`。`dispatch_mode`、`audit_method`、`retry_count` 與執行狀態列一致。
-- `audit`：`audit.json` 的 `seats` 與 `aggregate` **原封不動貼入**，不得刪減、改寫或重新計算。
-  頁面上的評分、立場分布、評分撕裂全部由範本從這裡讀取。
+- `meta`：`title`、`run_id`、`generated_at`、`dispatch_mode`（標準 / 降級）、`audit_method`（腳本 / 人工）、`retry_count`，與執行狀態列一致。`is_sample` 由腳本設定，不必填。
+- 評分、立場分布、評分撕裂不要寫進這個檔案，腳本會從 `audit.json` 帶入。
 - `synthesis`：步驟 3、4 已寫好的內容，逐字搬入對應欄位，不得在此新增結論：
   - `absent_reasons`：缺席席位與原因。
   - `conflicts`、`high_risk_blind_spots`：步驟 3 的深層矛盾與高危盲點。
@@ -29,7 +33,6 @@ JSON 結構與範例以範本內建的範例資料為準，填寫規則如下：
   - `baseline_dispositions`：防禦性底線處置表，每一條都要出現。
   - `plan`：硬化後的主方案，`sources` 填席位編號；主代理新增的條款填空陣列。
   - `circuit_breakers`、`next_actions`：熔斷條件與即刻行動清單。
-- JSON 字串中的 `</` 必須寫成 `<\/`，否則會提前結束 script 區塊。
 
 ## 呈現規則（由範本執行，主 Agent 不需處理）
 

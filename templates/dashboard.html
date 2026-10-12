@@ -309,10 +309,9 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
 <div id="tip" role="tooltip" hidden></div>
 
 <!--
-  COUNCIL-DATA 填寫規則（主 Agent 只能改下方 BEGIN 與 END 兩個標記之間的 JSON，其餘 HTML/CSS/JS 一律不動）：
-  1. 只替換 COUNCIL-DATA:BEGIN 與 COUNCIL-DATA:END 這兩個註解標記之間的 JSON。
-  2. JSON 字串中的 "</" 必須寫成 "<\/"，否則會提前結束 script 區塊；字串中也避免出現 HTML 註解起始符號（可改寫成 < 加上驚嘆號與兩個連字號）。
-  3. meta.is_sample 填 false；audit 區塊為 audit.json 的 seats 與 aggregate 原封不動；synthesis 全部為純文字。
+  COUNCIL-DATA 區塊由 scripts/build_dashboard.py 產生，主 Agent 不得手動編輯本檔。
+  腳本會把 audit.json 的 seats 與 aggregate 原封不動帶入，並跳脫資料中的 < > &。
+  下方為範例資料（meta.is_sample = true）。
 -->
 <!-- COUNCIL-DATA:BEGIN -->
 <script type="application/json" id="council-data">

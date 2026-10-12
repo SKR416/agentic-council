@@ -57,7 +57,7 @@ git clone https://github.com/SKR416/agentic-council.git "$env:USERPROFILE\.gemin
 ├── roles/                           # 6 張固定角色卡（派發時逐字附加）
 ├── schemas/subagent_output.md       # 子代理輸出規格與六維評分定義
 ├── scripts/audit_council.py         # 機械式稽核腳本
-└── templates/                       # 審查員系統指令、凍結簡報、立場紀錄、儀表板規範
+└── templates/                       # 審查員系統指令、凍結簡報、立場紀錄、儀表板規範與範本
 ```
 
 每次執行的工作檔案會寫在工作區的 `.council/runs/<YYYYMMDD-HHMMSS>/`。

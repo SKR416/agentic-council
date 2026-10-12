@@ -30,7 +30,8 @@ agentic-council/
     ├── reviewer_system_prompt.md         # 審查員專用子代理類型的系統指令
     ├── baseline_brief.md                 # 凍結簡報模板（傳給子代理）
     ├── stance_record.md                  # 立場剝除紀錄模板（不得傳給子代理）
-    └── dashboard.md                      # 視覺化儀表板規範（使用者接受圖解時才讀）
+    ├── dashboard.md                      # 視覺化儀表板規範（使用者接受圖解時才讀）
+    └── dashboard.html                    # 儀表板固定範本（只填資料，不改版面）
 ```
 
 讀取時機：
@@ -38,7 +39,7 @@ agentic-council/
 - `templates/baseline_brief.md` 與 `templates/stance_record.md`：步驟 1 撰寫簡報時讀取。
 - `roles/*.md` 與 `schemas/subagent_output.md`：步驟 1 組裝任務時讀取，並逐字附加到子代理任務中。
 - `scripts/audit_council.py`：步驟 2.5 執行。
-- `templates/dashboard.md`：使用者接受步驟 4 的圖解選項後才讀取。
+- `templates/dashboard.md`：使用者接受步驟 4 的圖解選項後才讀取，並依其指示複製 `templates/dashboard.html` 填入資料。
 - 主 Agent 在步驟 2.5 判斷角色符合度時，需回頭對照 `roles/` 中的必答問題與禁止事項。
 
 每次執行的工作檔案存放在工作區的 `.council/runs/<YYYYMMDD-HHMMSS>/`（以下稱「執行資料夾」），包含 `brief.md`、`stance_record.md`、`seats.json` 與稽核腳本產出的 `audit.json`。

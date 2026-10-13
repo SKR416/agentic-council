@@ -224,6 +224,18 @@ details.rep > summary:focus-visible { outline-offset: -2px; }
 .plan li { padding-inline-start: 4px; }
 .plan .src { display: inline-flex; flex-wrap: wrap; gap: 4px; margin-inline-start: 8px; vertical-align: baseline; }
 .plan .src .chip { font-size: 12px; padding-block: 0; }
+.plan.timeline { list-style: none; padding: 0; }
+.plan.timeline li { display: grid; grid-template-columns: 8.5em minmax(0, 1fr); gap: 14px; padding: 12px 4px; border-bottom: 1px solid var(--border); }
+.plan.timeline li:last-child { border-bottom: 0; }
+.plan.timeline .t { font-family: var(--serif); font-weight: 600; color: var(--accent); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.plan.timeline .t.none { color: var(--muted); font-weight: 400; }
+.conclusion { border: 1px solid var(--border); border-inline-start: 4px solid var(--accent); background: var(--surface); border-radius: 6px; padding: 18px 22px; }
+.conclusion .row { display: flex; gap: 12px; align-items: baseline; flex-wrap: wrap; }
+.conclusion .headline { flex: 1 1 320px; min-width: 0; font-family: var(--serif); font-size: 19px; line-height: 1.7; font-weight: 600; margin: 0; }
+.conclusion h3 { margin-block: 16px 6px; font-size: 15px; }
+.conclusion ul { margin: 0; padding-inline-start: 1.3em; }
+.conclusion .jump { margin: 14px 0 0; font-size: 14px; }
+.conclusion .jump a { color: var(--accent); }
 .actions { list-style: none; padding: 0; counter-reset: act; display: grid; gap: 12px; }
 .actions li { counter-increment: act; display: flex; gap: 14px; align-items: baseline; margin: 0; padding-block-end: 12px; border-bottom: 1px solid var(--border); min-width: 0; }
 .actions li:last-child { border-bottom: 0; padding-block-end: 0; }
@@ -237,6 +249,7 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
 
 @media (max-width: 640px) {
   .legend { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .plan.timeline li { grid-template-columns: minmax(0, 1fr); gap: 2px; }
   table.stack, table.stack tbody, table.stack tr, table.stack td { display: block; width: 100%; }
   table.stack thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
   table.stack tr { padding: 10px 12px; border-bottom: 1px solid var(--border); }
@@ -259,6 +272,11 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
     <div id="banners" class="banners"></div>
 
     <header class="head" id="head"></header>
+
+    <section id="sec-conclusion" aria-labelledby="h-conclusion">
+      <h2 id="h-conclusion">結論摘要</h2>
+      <div id="conclusion"></div>
+    </section>
 
     <section aria-labelledby="h-overview">
       <h2 id="h-overview">總覽</h2>
@@ -627,43 +645,44 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
     ],
     "plan": [
       {
-        "text": "拆分前先建立可一鍵回退到單體的切換機制，並完成一次演練。",
+        "time": "拆分前", "text": "拆分前先建立可一鍵回退到單體的切換機制，並完成一次演練。",
         "sources": [
           1
         ]
       },
       {
-        "text": "第一階段只選痛點最大的一個模組抽出試行，其餘維持單體，並先整理出清楚的模組邊界。",
+        "time": "第一階段", "text": "第一階段只選痛點最大的一個模組抽出試行，其餘維持單體，並先整理出清楚的模組邊界。",
         "sources": [
           3,
           5
         ]
       },
       {
-        "text": "服務邊界依業務邊界劃分，動工前完成邊界評審。",
+        "time": "動工前", "text": "服務邊界依業務邊界劃分，動工前完成邊界評審。",
         "sources": [
           2
         ]
       },
       {
-        "text": "每個新服務上線前須具備獨立的監控、告警與回溯機制，並指派唯一負責團隊與值班表。",
+        "time": "每個服務上線前", "text": "每個新服務上線前須具備獨立的監控、告警與回溯機制，並指派唯一負責團隊與值班表。",
         "sources": [
           1,
           6
         ]
       },
       {
-        "text": "試行前先以流量與部署數據驗證單體是否確實無法水平擴展，結果作為是否繼續的依據。",
+        "time": "試行前", "text": "試行前先以流量與部署數據驗證單體是否確實無法水平擴展，結果作為是否繼續的依據。",
         "sources": [
           5
         ]
       },
       {
-        "text": "試行的成功與停止指標、過渡期起訖日，與團隊確認後再納入排程。",
+        "time": "排程前", "text": "試行的成功與停止指標、過渡期起訖日，與團隊確認後再納入排程。",
         "sources": []
       }
     ],
-    "circuit_breakers": [
+    "conclusion": "有條件推進：不一次性全面拆分，先備妥一鍵回退與值班歸屬，只抽出痛點最大的一個模組試行。",
+      "circuit_breakers": [
       "試行模組上線後，若出現無法在一次值班內修復的資料不一致，立即切回單體並暫停後續拆分。",
       "若再次發生告警被忽略或回應延遲的事件，暫停新增服務並重新召開審查。",
       "席位 4 缺席造成的長期連鎖效應盲區，須在試行結束前補開一次審查，否則不得擴大拆分。"
@@ -807,6 +826,23 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
         chip(m.attended + '/6', m.attended < 6 ? 'warn' : '', '到席'),
         chip(retry, '', '重派次數'))
     ]);
+  }
+
+  // ----- 結論摘要（置頂）：一句話結論、傾向、最優先的熔斷條件 -----
+  function renderConclusion(m) {
+    var syn = m.syn;
+    var tend = (syn.tendency && typeof syn.tendency === 'object') ? syn.tendency : {};
+    var rcls = tend.result === '一致' ? 'good' : (tend.result === '部分一致' ? 'warn' : (tend.result === '相反' ? 'bad' : ''));
+    var head = str(syn.conclusion) || str(tend.text);
+    var cb = arr(syn.circuit_breakers).filter(function (x) { return typeof x === 'string' && x.length; }).slice(0, 3);
+    if (!head && !tend.result && !cb.length) { document.getElementById('sec-conclusion').hidden = true; return; }
+    mount('conclusion', el('div', { 'class': 'conclusion' },
+      el('div', { 'class': 'row' },
+        tend.result ? chip(str(tend.result), rcls, '與原傾向') : null,
+        head ? el('p', { 'class': 'headline' }, head) : null),
+      cb.length ? el('h3', null, '最優先的熔斷條件') : null,
+      cb.length ? el('ul', null, cb.map(function (t) { return el('li', null, t); })) : null,
+      el('p', { 'class': 'jump' }, el('a', { href: '#h-plan' }, '完整硬化方案、熔斷條件與行動清單 ↓'))));
   }
 
   function renderOverview(m) {
@@ -1058,13 +1094,20 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
   function renderPlan(m) {
     var items = arr(m.syn.plan);
     if (!items.length) { mount('plan', emptyNote()); return; }
-    var ol = el('ol', { 'class': 'plan' });
+    var timed = items.some(function (it) { return it && typeof it.time === 'string' && it.time.length; });
+    var ol = el('ol', { 'class': timed ? 'plan timeline' : 'plan' });
     items.forEach(function (it) {
       var srcs = arr(it && it.sources);
       var src = el('span', { 'class': 'src' });
       if (srcs.length) srcs.forEach(function (n) { src.appendChild(chip('席位 ' + n)); });
       else src.appendChild(chip('主代理新增', 'added'));
-      ol.appendChild(el('li', null, str(it && it.text), src));
+      if (timed) {
+        var tm = str(it && it.time);
+        ol.appendChild(el('li', null, el('span', { 'class': tm ? 't' : 't none' }, tm || DASH),
+          el('span', null, str(it && it.text), src)));
+      } else {
+        ol.appendChild(el('li', null, str(it && it.text), src));
+      }
     });
     mount('plan', ol);
   }
@@ -1102,6 +1145,7 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
   try {
     var model = buildModel(data);
     renderTop(model);
+    renderConclusion(model);
     renderOverview(model);
     renderRadars(model);
     renderMatrix(model);

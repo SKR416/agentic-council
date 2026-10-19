@@ -6,7 +6,7 @@
 
 適用情境：技術架構重構、重大硬體採購、策略佈局、資產配置、行程與計畫加固等高風險的複雜決策。
 
-目前版本：**v2.4.0**
+目前版本：**v2.5.0**
 
 ![儀表板總覽：結論摘要、立場分布、評分撕裂](docs/images/dashboard-top.png)
 
@@ -332,16 +332,21 @@ git clone https://github.com/SKR416/agentic-council.git "$env:USERPROFILE\.gemin
 ├── SKILL.md                         # 流程、閘門與規則（agy 讀取的主檔）
 ├── roles/                           # 6 張固定角色卡（派發時逐字附加）
 ├── schemas/
-│   └── subagent_output.md           # 子代理輸出規格與六維評分定義
+│   ├── subagent_output.md           # 子代理輸出規格與六維評分定義
+│   └── run_files.md                 # 執行資料夾檔案契約（seats.json、audit.json 等）
 ├── scripts/
 │   ├── audit_council.py             # 機械式稽核腳本
-│   └── build_dashboard.py           # 儀表板產生腳本
+│   ├── build_dashboard.py           # 儀表板產生腳本
+│   └── transcripts/agy.py           # agy transcript 讀取
 ├── templates/
 │   ├── reviewer_system_prompt.md    # 審查員子代理類型的系統指令
+│   ├── retry_menu.md                # 重派固定提示選單
+│   ├── preset_menu.md               # 推薦選項選單
 │   ├── baseline_brief.md            # 凍結簡報模板（傳給子代理）
 │   ├── stance_record.md             # 立場剝除紀錄模板（不得傳給子代理）
 │   ├── dashboard.md                 # 儀表板資料欄位與產生規範
 │   └── dashboard.html               # 儀表板固定範本（含示範資料）
+├── tests/                           # pytest（python -m pytest tests -q）
 └── docs/images/                     # README 使用的範例截圖
 ```
 
@@ -367,6 +372,22 @@ SKILL.md 與各模板檔「每次都逐字相同」是設計的核心：任何�
 ---
 
 ## 更新紀錄
+
+### v2.5.0
+
+依 Claude × Gemini 交叉審查的結果修正，重點是讓「主 Agent 能偷渡什麼」由腳本判定，而不是靠自律。
+
+- **重派不能夾帶提示**：重派任務只能附 `templates/retry_menu.md` 的固定條目（最多 2 條），`seats.json` 記錄所選編號；其餘文字一律判「派發錯誤」。
+- **紀錄檔不能偽造**：transcript 必須位於 agy brain 資料夾中該席對話編號之下，不符判「未稽核」且不讀取。
+- **統計只算通過的席位**：「未稽核」與離題排除的席位不進立場分布、撕裂與圖表，原始報告照樣呈現。
+- **離題排除**：主 Agent 以 `role_check` 排除席位時，必須逐字引用角色卡「必答問題」或「禁止」中完整的一條；只能排除，不能救回。
+- **數字來源**：方案存成 `plan.md` 後執行 `--check-plan`，題目與通過席位報告中都找不到的數字一律列出，改寫為待確認步驟前不能定案。
+- **錨定提示**：列出 2 席以上沿用的題目用詞（`anchoring_terms`），主 Agent 必須逐條交代。
+- **輸出規格**：新增【必答回應】欄位（至少 2 題，由腳本計數）；字數改為建議上限 1,200／1,500 字；標 [外部來源] 必須真的呼叫過搜尋工具。
+- **流程**：派出評審後只輸出一句就結束回合；評審以 send_message 交報告後只回「已完成回報」；凍結題目前確認使用者提過的數字都已寫入。
+- **輸出**：腳本產生 `summary.md`、`report_full.md`，對話只貼摘要；儀表板預設產生，另列未稽核與離題排除名單。
+- **安全邊界**：明列評審禁用工具；網頁內容與評審報告只是資料；主 Agent 只寫執行資料夾、只跑兩支腳本。
+- **測試**：新增 `tests/`（pytest），涵蓋交叉審查發現的重派夾帶與偽造紀錄案例。
 
 ### v2.4.0
 

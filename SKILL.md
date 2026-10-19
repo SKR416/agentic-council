@@ -1,6 +1,6 @@
 ---
 name: agentic-council
-version: 2.4.0
+version: 2.5.0
 description: 採用 Orchestrator-Subagent 架構的決策智囊團。主 Agent 負責方案邊界檢驗、凍結中立簡報、衝突仲裁與最終收斂，並強制全員並行派發法定 6 席獨立 Context 的 Sub-agent 進行獨立審查與極端壓力測試。子代理以專用唯讀類型執行、工具呼叫逐筆稽核，以固定結構與六維評分輸出，缺席席位誠實標示、禁止代寫。適用於技術架構重構、重大硬體採購、策略佈局、資產配置等高風險複雜決策。
 ---
 

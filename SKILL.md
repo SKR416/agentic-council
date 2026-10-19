@@ -23,12 +23,14 @@ agentic-council/
 │   ├── 05-contrarian.md                  # 席位 5：逆向破局者
 │   └── 06-behavioral-auditor.md          # 席位 6：人因審查員
 ├── schemas/
-│   └── subagent_output.md                # 子代理輸出規格（含六維評分定義）
+│   ├── subagent_output.md                # 子代理輸出規格（含六維評分定義）
+│   └── run_files.md                      # 執行資料夾檔案契約（seats.json、audit.json 等）
 ├── scripts/
 │   ├── audit_council.py                  # 機械式稽核腳本（隔離、派發一致性、格式、統計）
 │   └── build_dashboard.py                # 儀表板產生腳本（套用範本、帶入 audit.json）
 └── templates/
     ├── reviewer_system_prompt.md         # 審查員專用子代理類型的系統指令
+    ├── retry_menu.md                     # 重派固定提示選單（最多選 2 條）
     ├── baseline_brief.md                 # 凍結簡報模板（傳給子代理）
     ├── stance_record.md                  # 立場剝除紀錄模板（不得傳給子代理）
     ├── dashboard.md                      # 視覺化儀表板規範（使用者接受圖解時才讀）
@@ -159,6 +161,8 @@ Baseline Brief 撰寫禁令：
 3. 立場剝除紀錄中的每一句原句，是否都已確認沒有出現在簡報裡（含「已評估並排除的選項」）？逐句比對，不憑印象。
 任一題的答案不理想，就刪改到符合為止。
 
+數字確認（凍結前必做）：主 Agent 回頭逐一檢視使用者說過的每一個數字（金額、數量、期限、比例等），確認都已寫進簡報；使用者說過、但題目沒寫的數字，沒有例外，一律補進簡報或明確請使用者決定是否納入。沒寫進簡報的數字，之後不得出現在方案中（步驟 4 的數值規則以簡報與席位報告為依據）。
+
 凍結與存檔：建立本次的執行資料夾，將簡報存為 `brief.md`、立場剝除紀錄存為 `stance_record.md`。之後組裝任務時，一律以讀取 `brief.md` 檔案內容的方式取得簡報，不得從記憶重新輸出。
 
 任務組裝規則：
@@ -175,18 +179,26 @@ Baseline Brief 撰寫禁令：
 - 每個子代理的 `Prompt` 為步驟 1 組裝的對應席位任務。
 - 不要依賴 `Workspace` 參數做讀取隔離。實測確認子代理仍可透過絕對路徑讀取任意檔案，讀檔限制只能靠系統指令禁止與步驟 2.5 的稽核。
 
+派出 6 位評審後，主 Agent 只輸出一句「已派出 6 位評審，等待回報」就結束回合，禁止重複輸出等待文字（過去實測重複輸出會陷入迴圈）。被叫醒時：若還沒收齊 6 份報告，先呼叫 `manage_subagents`（Action: list）查子代理狀態，再結束回合繼續等，不輸出多餘文字；收齊 6 份後才執行步驟 2.5 的稽核腳本。
+
 派發後，呼叫 `manage_subagents`（Action: list）取得每個子代理的 transcript 路徑，並在執行資料夾寫入 `seats.json`。`transcript` 一律填同一目錄下未截斷的 `transcript_full.jsonl`，不要填緊湊版 `transcript.jsonl`：緊湊版會截斷過長的提示內容，稽核腳本逐字比對簡報時會誤判為「找不到簡報」。
 
 ```json
 {
   "parent_id": "<主 Agent 自身的對話 ID>",
   "seats": [
-    {"seat": 1, "conversation_id": "<子代理 ID>", "transcript": "<transcript 路徑>"}
+    {"seat": 1, "conversation_id": "<子代理 ID>", "transcript": "<transcript 路徑>"},
+    {"seat": 3, "conversation_id": "<重派的子代理 ID>", "transcript": "<transcript 路徑>",
+     "retry": {"count": 1, "hint_ids": ["R2"], "previous_transcript": "<前一次的 transcript 路徑>"}},
+    {"seat": 5, "conversation_id": "<子代理 ID>", "transcript": "<transcript 路徑>",
+     "role_check": {"pass": false, "reason": "<一句話>", "quote": "<角色卡原文>"}}
   ]
 }
 ```
 
-重派的席位以新的子代理 ID 與 transcript 取代原紀錄，並加上 `"retry": true`。
+欄位格式以 `schemas/run_files.md` 為準：
+- 重派的席位以新的子代理 ID 與 transcript 取代原紀錄，並加上 `retry` 物件：`count`（重派次數）、`hint_ids`（所選提示的編號，最多 2 個，皆須存在於 `templates/retry_menu.md`；不附提示就填空陣列）、`previous_transcript`（前一次的 transcript 路徑）。
+- `role_check` 用於記錄步驟 2.5 第二道（角色符合度）不通過的席位：`{"pass": false, "reason": "<一句話>", "quote": "<逐字引用>"}`。`quote` 必須逐字引用該席角色卡「必答問題」或「禁止」段落中完整的一條（不得只引片段）；`role_check` 只能排除該席、不能救回腳本判定未通過的席位，原始報告仍照常呈現。通過的席位不需要寫此欄位。
 
 ### 步驟 2.5：隔離稽核、回收驗證與失敗處理 (Audit, Validation & Failure Handling)
 
@@ -201,7 +213,7 @@ python <skill 資料夾>/scripts/audit_council.py --skill-dir <skill 資料夾> 
 ```
 
 腳本會逐席檢查以下項目，並輸出判定（通過 / 派發錯誤 / 隔離違規 / 格式不合格 / 未稽核）：
-- 派發一致性：子代理實際收到的任務，是否由 `brief.md`、該席角色卡、輸出規格逐字組成，且沒有夾帶其他文字。首次派發若有額外文字判定為「派發錯誤」；重派席位允許一行程序性修正提示，但腳本會列出原文，主 Agent 必須確認它沒有暗示立場或內容方向。
+- 派發一致性：子代理實際收到的任務，是否由 `brief.md`、該席角色卡、輸出規格逐字組成，且沒有夾帶其他文字。首次派發若有額外文字判定為「派發錯誤」；重派席位在三段之後只允許 `templates/retry_menu.md` 的固定條目，殘留文字由稽核腳本比對選單，不符一律判「派發錯誤」，不需要主 Agent 人工確認。
 - 隔離：工具呼叫是否只有 `search_web`、`read_url_content`，以及收件對象為主 Agent 的 `send_message`。
 - 格式：必填欄位、立場四選一、六維評分為 1–10 整數、盲點數量與標註、[外部來源] 附網址、字數（900 字目標值，席位 5 為 1200 字；超過只記警告）。
 - 統計：立場分布與評分撕裂，只納入判定為「通過」或「未稽核」的席位。
@@ -219,7 +231,7 @@ python <skill 資料夾>/scripts/audit_council.py --skill-dir <skill 資料夾> 
 #### 處置規則
 
 1. 兩道皆通過：進入步驟 3。
-2. 任一道不通過（「派發錯誤」除外）、逾時或執行錯誤：以新的子代理重新派發一次（同樣使用 `council_reviewer` 類型）。重派任務 = 原封不動的三段內容 + 一行修正提示。修正提示只能指出程序問題（例如「前次執行因使用了禁止的工具而作廢」「缺少六維評分」「內容未回應必答問題」），不得暗示應採取何種立場、評分或內容方向。
+2. 任一道不通過（「派發錯誤」除外）、逾時或執行錯誤：以新的子代理重新派發一次（同樣使用 `council_reviewer` 類型）。重派任務 = 原封不動的三段內容 + 一個空行 + 從 `templates/retry_menu.md` 選出的最多 2 條條目原文（每條一行），除此之外不得有任何文字，也不得自行撰寫或改寫提示。選單條目只指出程序問題，不暗示立場、評分或內容方向。重派時在 `seats.json` 記錄 `retry` 物件（`count`、`hint_ids`、`previous_transcript`），格式見 `schemas/run_files.md`。第二道不通過者，另依步驟 2 的說明寫入 `role_check`。
 3. 重派後仍失敗：標示該席位為【缺席】。
    - 報告區顯示【缺席】與失敗原因（隔離違規 / 逾時 / 格式不合格 / 角色偏離 / 執行錯誤）。
    - 該席位的六維評分全部以「—」呈現，不參與任何統計、撕裂判定或圖表。

@@ -43,7 +43,7 @@
 ### role_check（離題排除，D4）
 
 - 只有一種寫法：`{"pass": false, "reason": <str>, "quote": <str>}`。`pass` 為 true 或欄位不存在都等於「沒有排除」。
-- `quote` 必須逐字出現在該席角色卡的「必答問題：」或「禁止：」段落內（比對前兩邊都做 `norm()`）。不符：忽略此排除，並在 `audit.json` 頂層 `config_errors` 報錯。
+- `quote` 必須是該席角色卡「必答問題：」或「禁止：」段落中**完整的一條**（逐字，可省略開頭的 `- `；比對前做 `norm()`）。片段不算。不符：忽略此排除，並在 `audit.json` 頂層 `config_errors` 報錯。
 - 只能排除，不能救回：腳本判定未通過的席位，不因 `role_check` 改變判定。
 
 ## templates/retry_menu.md 與 templates/preset_menu.md

@@ -128,6 +128,7 @@ section { margin-block-start: 52px; min-width: 0; }
 .chip.bad  { border-color: color-mix(in oklab, var(--bad) 60%, var(--border)); background: color-mix(in oklab, var(--bad) 11%, var(--surface)); }
 .chip.st   { border-color: color-mix(in oklab, var(--st) 60%, var(--border)); background: color-mix(in oklab, var(--st) 11%, var(--surface)); }
 .chip.added { border-style: dashed; border-color: var(--accent); background: transparent; color: var(--accent); }
+.chips-inline { display: flex; flex-wrap: wrap; gap: 6px; justify-content: flex-end; }
 .chip.absent { border-style: dashed; color: var(--muted); background: transparent; }
 .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--st); flex: none; }
 
@@ -396,34 +397,11 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
       },
       {
         "seat": 3,
-        "conversation_id": "sample-conv-03a",
-        "verdict": "格式不合格",
-        "isolation": [],
-        "dispatch": [],
-        "residual": null,
-        "format_errors": [
-          "缺少評分：人因可持續性"
-        ],
-        "format_warnings": [],
-        "tools_used": [
-          "search_web",
-          "send_message"
-        ],
-        "stance": "要求推倒重構",
-        "scores": {
-          "生存安全": 5,
-          "上限潛力": 6,
-          "執行可行性": 3,
-          "長期穩定": 6,
-          "假設穩健度": 4
-        },
-        "chars": 255,
-        "report": "【席位】極簡實踐者 (The Pragmatist)\n【立場裁定】要求推倒重構\n【信心程度】中 —— 缺乏現行單體各模組的負載資料\n【六維評分】生存安全 5/10｜上限潛力 6/10｜執行可行性 3/10｜長期穩定 6/10｜假設穩健度 4/10\n【最強支持理由】解耦方向正確，長期可降低模組之間的牽連。\n【致命盲點】\n1. 場景：團隊人數不足以同時維運多個服務與既有單體，拆分期間新功能交付明顯停滯。\n   - 發生機率：高｜衝擊：重大\n   - 論據性質：[假設]（假設團隊能維持現有交付節奏）\n【防禦性底線】\n1. 先以模組化單體過渡，僅抽出痛點最大的模組試行。"
-      },
-      {
-        "seat": 3,
         "conversation_id": "sample-conv-03b",
         "verdict": "通過",
+        "retried": true,
+        "excluded_by_role_check": false,
+        "warnings": [],
         "isolation": [],
         "dispatch": [],
         "residual": "前次執行因缺少人因可持續性評分而作廢，請補齊後重新回報。",
@@ -448,21 +426,29 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
       {
         "seat": 4,
         "conversation_id": "sample-conv-04b",
-        "verdict": "格式不合格",
+        "verdict": "通過",
+        "retried": false,
+        "excluded_by_role_check": true,
+        "warnings": ["角色檢查：報告內容偏離本席職責，未計入票數"],
         "isolation": [],
         "dispatch": [],
-        "residual": "前次執行逾時未回傳報告，請重新審查並回報。",
-        "format_errors": [
-          "沒有回傳任何報告"
-        ],
+        "residual": null,
+        "format_errors": [],
         "format_warnings": [],
         "tools_used": [
-          "search_web"
+          "send_message"
         ],
-        "stance": null,
-        "scores": {},
-        "chars": 0,
-        "report": ""
+        "stance": "有條件推進",
+        "scores": {
+          "生存安全": 5,
+          "上限潛力": 5,
+          "執行可行性": 5,
+          "長期穩定": 5,
+          "假設穩健度": 5,
+          "人因可持續性": 5
+        },
+        "chars": 120,
+        "report": "【席位】（範例）離題報告\n【立場裁定】有條件推進\n【信心程度】低 —— 本報告改為討論行銷文案，與本席職責無關\n【最強支持理由】（離題內容，僅供範例顯示被排除席位的原始報告仍會保留）"
       },
       {
         "seat": 5,
@@ -572,7 +558,7 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
   },
   "synthesis": {
     "absent_reasons": {
-      "4": "逾時"
+      "4": "離題排除（角色檢查未通過，原始報告仍保留供參考）"
     },
     "conflicts": [
       "席位 2（支持推進）主張立即拆分，以換取獨立發版與擴縮；席位 1（強烈否決）認為拆分會擴大爆炸半徑並帶來資料一致性風險。兩者在「上限潛力」上分差最大（10 對 4），取捨取決於使用者對生存下限與成長速度的權重。",
@@ -785,6 +771,8 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
       }
       return {
         n: r.n, zh: r.zh, en: r.en, entry: p.entry, count: p.count, valid: inValid, reason: reason,
+        retried: !!(p.entry && p.entry.retried === true),
+        excluded: !!(p.entry && p.entry.excluded_by_role_check === true),
         scores: (p.entry && p.entry.scores && typeof p.entry.scores === 'object') ? p.entry.scores : {},
         stance: p.entry ? p.entry.stance : null
       };
@@ -972,7 +960,10 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
       var head = el('div', { 'class': 'top' },
         el('div', null, el('div', { 'class': 'seatno' }, '席位 ' + s.n), el('div', { 'class': 'role' }, s.zh),
           el('div', { 'class': 'seatno' }, s.en)),
-        s.valid ? stanceChip(s.stance) : chip('缺席', 'absent'));
+        el('div', { 'class': 'chips-inline' },
+          s.valid ? stanceChip(s.stance) : chip('缺席', 'absent'),
+          s.retried ? chip('已重派', 'warn') : null,
+          s.excluded ? chip('離題排除', 'bad') : null));
       var body;
       if (!s.valid) {
         body = el('div', { 'class': 'absent-body' }, el('span', { 'class': 'tag' }, '【缺席】'), '原因：' + s.reason);
@@ -1035,13 +1026,15 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
         el('span', { 'class': 'role' }, s.zh),
         s.valid ? stanceChip(s.stance) : chip('缺席', 'absent'),
         e.verdict ? chip(e.verdict, e.verdict === '通過' ? 'good' : (e.verdict === '未稽核' ? 'warn' : 'bad'), '稽核') : chip('無紀錄', 'absent', '稽核'),
-        s.count > 1 ? chip('已重派，採用最後一筆', 'warn') : null);
+        s.retried ? chip('已重派', 'warn') : null,
+        s.excluded ? chip('離題排除', 'bad') : null);
       var body = el('div', { 'class': 'body' });
       if (!s.valid) {
         body.appendChild(el('p', { 'class': 'absent-line' }, el('strong', null, '【缺席】'), '原因：' + s.reason));
-      } else {
+      }
+      if (s.valid || (s.excluded && e.report)) {
         body.appendChild(el('div', { 'class': 'report-text' }, str(e.report, '（沒有報告全文）')));
-        var warns = arr(e.format_warnings);
+        var warns = arr(e.warnings).concat(arr(e.format_warnings).filter(function (w) { return arr(e.warnings).indexOf(w) < 0; })).filter(function (w) { return typeof w === 'string' && w.length; });
         if (warns.length) body.appendChild(el('p', { 'class': 'report-warn' }, '稽核警告：' + warns.join('；')));
       }
       return el('details', { 'class': 'rep' }, summary, body);
@@ -1067,7 +1060,11 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
         tend.result || tend.text
           ? el('div', { 'class': 'tendency' }, chip(str(tend.result, DASH), rcls), el('p', null, str(tend.text)))
           : emptyNote()),
-      el('div', { 'class': 'block' }, el('h3', null, '覆蓋率聲明'), bulletList(syn.coverage))
+      el('div', { 'class': 'block' }, el('h3', null, '覆蓋率聲明'), bulletList(syn.coverage)),
+      el('div', { 'class': 'block' }, el('h3', null, '缺席席位與原因'),
+        bulletList(m.seats.filter(function (s) { return !s.valid; }).map(function (s) {
+          return '席位 ' + s.n + ' ' + s.zh + '：' + s.reason;
+        })))
     ]);
   }
 

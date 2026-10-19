@@ -97,12 +97,96 @@ def load_transcript(path):
 
 def extract_prompt(entries):
     for e in entries:
-        if e.get("type") == "SYSTEM_MESSAGE" and "content=" in e.get("content", ""):
-            c = e["content"]
-            start = c.index("content=", c.index("[Message]") if "[Message]" in c else 0) + len("content=")
-            end = c.rfind("</SYSTEM_MESSAGE>")
-            return c[start:end] if end > start else c[start:]
+        if not isinstance(e, dict) or e.get("type") != "SYSTEM_MESSAGE":
+            continue
+        c = e.get("content")
+        if not isinstance(c, str):
+            continue
+        msg = c.find("[Message]")
+        i = c.find("content=", msg if msg >= 0 else 0)
+        if i < 0:
+            i = c.find("content=")
+        if i < 0:
+            continue
+        start = i + len("content=")
+        end = c.rfind("</SYSTEM_MESSAGE>")
+        return c[start:end] if end > start else c[start:]
     return None
+
+
+def load_menu(skill_dir, prefix="R"):
+    """解析 templates/retry_menu.md 的條目：{編號: 條目全文}。讀不到回傳空表。"""
+    try:
+        text = (Path(skill_dir) / "templates" / "retry_menu.md").read_text(encoding="utf-8")
+    except Exception:
+        return {}
+    out = {}
+    for line in text.replace("\r\n", "\n").split("\n"):
+        m = re.match(rf"^- ({prefix}\d+)\s+(.+)$", line.rstrip())
+        if m and m.group(1) not in out:
+            out[m.group(1)] = m.group(2).strip()
+    return out
+
+
+def retry_info(seat):
+    """回傳 None（非重派）或 {"hint_ids": [...], "valid": bool}。"""
+    r = seat.get("retry")
+    if r is True:
+        return {"hint_ids": [], "valid": True}
+    if isinstance(r, dict):
+        ids = r.get("hint_ids", [])
+        ok = isinstance(ids, list) and all(isinstance(i, str) for i in ids)
+        return {"hint_ids": ids if ok else [], "valid": ok}
+    return None
+
+
+def check_retry_residual(residual, hint_ids, menu):
+    """重派殘留必須依序等於 hint_ids 對應的選單條目。回傳錯誤訊息清單。"""
+    errs = []
+    if len(hint_ids) > RETRY_HINT_MAX:
+        errs.append(f"重派附了 {len(hint_ids)} 個提示編號，超過上限 {RETRY_HINT_MAX}")
+    unknown = [i for i in hint_ids if i not in menu]
+    if unknown:
+        errs.append(f"hint_ids 不在 retry_menu.md：{', '.join(unknown)}")
+    if errs:
+        return errs
+    expected = [menu[i] for i in hint_ids]
+    actual = [l.strip() for l in (residual or "").split("\n") if l.strip()]
+    if actual != expected:
+        errs.append("重派任務的額外文字與 hint_ids 對應的 retry_menu.md 條目不符"
+                    f"（預期 {len(expected)} 行選單原文，實際 {len(actual)} 行：{' / '.join(actual)[:100]}）")
+    return errs
+
+
+def role_sections(role_text):
+    """切出角色卡「必答問題：」與「禁止：」兩段（到下一個空行為止）。"""
+    out = []
+    lines = norm(role_text).split("\n")
+    for i, l in enumerate(lines):
+        if l.strip() in ("必答問題：", "禁止：", "必答問題:", "禁止:"):
+            seg = []
+            for x in lines[i + 1:]:
+                if not x.strip():
+                    break
+                seg.append(x)
+            out.append("\n".join(seg))
+    return out
+
+
+def check_role_check(seat, role_text):
+    """回傳 (excluded, error_or_None)。只有 pass is False 才生效。"""
+    rc = seat.get("role_check")
+    if not isinstance(rc, dict) or rc.get("pass") is not False:
+        return False, None
+    q = rc.get("quote")
+    n = seat.get("seat")
+    if not isinstance(q, str) or not norm(q):
+        return False, f"席位 {n} 的 role_check 缺少 quote，已忽略此排除"
+    # 必須引用完整的一條，不接受片段：否則引用「風險」兩個字就能排除任何一席。
+    items = {re.sub(r"^[-*]\s*", "", l.strip()) for sec in role_sections(role_text) for l in sec.split("\n")}
+    if re.sub(r"^[-*]\s*", "", norm(q)) in items:
+        return True, None
+    return False, f"席位 {n} 的 role_check.quote 不是角色卡「必答問題」或「禁止」段落中完整的一條，已忽略此排除"
 
 
 def normalize_args(raw):
@@ -247,17 +331,33 @@ def validate_report(report, limit, expected_role=None):
     return errors, warnings, result
 
 
-def audit_seat(seat, parent_id, brief, roles, schema):
-    out = {"seat": seat["seat"], "conversation_id": seat.get("conversation_id"),
-           "verdict": None, "isolation": [], "dispatch": [], "residual": None,
-           "format_errors": [], "format_warnings": [], "tools_used": [],
-           "stance": None, "scores": {}, "chars": 0}
-    path = to_path(seat["transcript"])
+def new_row(seat_no, conv, retried=False):
+    return {"seat": seat_no, "conversation_id": conv,
+            "verdict": None, "excluded_by_role_check": False, "retried": retried,
+            "must_answer_count": None, "warnings": [],
+            "isolation": [], "dispatch": [], "residual": None,
+            "format_errors": [], "format_warnings": [], "tools_used": [],
+            "stance": None, "scores": {}, "chars": 0, "report": ""}
+
+
+def audit_seat(seat, parent_id, brief, roles, schema, menu=None, config_errors=None):
+    menu = menu or {}
+    config_errors = config_errors if config_errors is not None else []
+    retry = retry_info(seat)
+    out = new_row(seat["seat"], seat.get("conversation_id"), seat.get("retry") not in (None, False))
+    out["warnings"] = out["format_warnings"]      # 同一個清單，之後的警告自動同步
     try:
+        out["excluded_by_role_check"], err = check_role_check(seat, roles.get(seat["seat"], ""))
+        if err:
+            config_errors.append(err)
+    except Exception as e:
+        config_errors.append(f"席位 {seat['seat']} 的 role_check 無法解析：{e!r}")
+    try:
+        path = to_path(seat["transcript"])
         entries = load_transcript(path)
     except Exception as e:
         out["verdict"] = "未稽核"
-        out["isolation"].append(f"無法讀取 transcript：{e}")
+        out["isolation"].append(f"無法讀取 transcript：{e!r}")
         return out
 
     issues, residual = check_prompt(extract_prompt(entries), brief, roles[seat["seat"]], schema)
@@ -291,7 +391,12 @@ def audit_seat(seat, parent_id, brief, roles, schema):
 
     unknown_rcpt = any("無法判斷收件對象" in i for i in out["isolation"])
     hard_violation = any("無法判斷收件對象" not in i for i in out["isolation"])
-    if residual and not seat.get("retry"):
+    if out["retried"]:
+        if retry is None or not retry["valid"]:
+            out["dispatch"].append("seats.json 的 retry 格式不合法（hint_ids 必須是字串清單）")
+        else:
+            out["dispatch"] += check_retry_residual(residual, retry["hint_ids"], menu)
+    elif residual:
         out["dispatch"].append("首次派發的任務含有簡報、角色卡、規格以外的文字")
     if out["dispatch"]:
         out["verdict"] = "派發錯誤"
@@ -308,10 +413,10 @@ def audit_seat(seat, parent_id, brief, roles, schema):
 
 def absent_row(seat_no, reason):
     """seats.json 中沒有登錄的席位，仍必須以缺席列出，不能從報表中消失。"""
-    return {"seat": seat_no, "conversation_id": None, "verdict": "缺席",
-            "isolation": [], "dispatch": [reason], "residual": None,
-            "format_errors": [], "format_warnings": [], "tools_used": [],
-            "stance": None, "scores": {}, "chars": 0, "report": ""}
+    row = new_row(seat_no, None)
+    row["verdict"] = "缺席"
+    row["dispatch"] = [reason]
+    return row
 
 
 def validate_seats_config(cfg):
@@ -321,8 +426,11 @@ def validate_seats_config(cfg):
     """
     errors, rows, seen_seat, seen_conv, seen_tx = [], [], {}, {}, {}
     for raw in cfg.get("seats") or []:
+        if not isinstance(raw, dict):
+            errors.append(f"席位登錄項目不是物件：{raw!r}")
+            continue
         n = raw.get("seat")
-        if not isinstance(n, int) or not 1 <= n <= 6:
+        if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= 6:
             errors.append(f"席位編號不合法：{n!r}（必須是 1–6 的整數）")
             continue
         if n in seen_seat:
@@ -334,8 +442,8 @@ def validate_seats_config(cfg):
             continue
         tx = raw.get("transcript")
         try:
-            key = str(to_path(tx).resolve()).lower() if tx else None
-        except OSError:
+            key = str(to_path(tx).resolve()).lower() if tx and isinstance(tx, str) else None
+        except (OSError, ValueError):
             key = str(tx).lower()
         if key and key in seen_tx:
             errors.append(f"席位 {n} 與席位 {seen_tx[key]} 指向同一份 transcript")
@@ -357,7 +465,8 @@ def aggregate(seats):
             continue
         seen.add(s["seat"])
         deduped.append(s)
-    valid = [s for s in deduped if s["verdict"] in ("通過", "未稽核") and len(s["scores"]) == 6]
+    valid = [s for s in deduped if s["verdict"] in ("通過", "未稽核") and len(s["scores"]) == 6
+             and not s.get("excluded_by_role_check")]
     dist = {k: sum(1 for s in valid if s["stance"] == k) for k in STANCES}
     tears = []
     for dim in DIMENSIONS:
@@ -369,6 +478,11 @@ def aggregate(seats):
     return {"valid_seats": [s["seat"] for s in valid], "stance_distribution": dist, "tears": tears}
 
 
+def cell(text):
+    """表格儲存格內：| 跳脫成 \\|、換行改成空白。"""
+    return str(text).replace("|", "\\|").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+
+
 def to_markdown(seats, agg, residual_note):
     lines = ["### 機械式稽核結果", "",
              "| 席位 | 判定 | 使用工具 | 字數 | 問題 |", "|---|---|---|---|---|"]
@@ -376,6 +490,9 @@ def to_markdown(seats, agg, residual_note):
         problems = s["dispatch"] + s["isolation"] + s["format_errors"] + s["format_warnings"]
         if s["residual"]:
             problems.append("任務含額外內容（見 audit.json）")
+        if s.get("excluded_by_role_check"):
+            problems.append("離題（role_check），不計票")
+        problems = [cell(p) for p in problems]
         lines.append(f"| {s['seat']} | {s['verdict']} | {', '.join(s['tools_used']) or '—'} | "
                      f"{s['chars'] or '—'} | {'；'.join(problems) or '—'} |")
     lines += ["", "### 六維評分總表", "",
@@ -467,7 +584,16 @@ def main():
 
     cfg = json.loads((run / "seats.json").read_text(encoding="utf-8"))
     rows, missing, cfg_errors = validate_seats_config(cfg)
-    seats = [audit_seat(s, cfg["parent_id"], brief, roles, schema) for s in rows]
+    menu = load_menu(skill)
+    seats = []
+    for s in rows:
+        try:
+            seats.append(audit_seat(s, cfg.get("parent_id"), brief, roles, schema, menu, cfg_errors))
+        except Exception as e:      # 單席問題只影響該席，不讓整批稽核中斷
+            row = new_row(s.get("seat"), s.get("conversation_id"), s.get("retry") not in (None, False))
+            row["verdict"] = "未稽核"
+            row["isolation"].append(f"稽核該席時發生例外：{e!r}")
+            seats.append(row)
     for n in missing:
         seats.append(absent_row(n, "seats.json 中沒有這一席的執行紀錄"))
     seats.sort(key=lambda x: x["seat"])
@@ -482,11 +608,12 @@ def main():
 
     residual_note = None
     if any(s["residual"] for s in seats):
-        residual_note = "任務中的額外文字（重派席位僅允許一行程序性修正提示，請人工確認未暗示立場）：\n" + "\n".join(
-            f"- 席位 {s['seat']}{'（重派）' if any(c.get('seat') == s['seat'] and c.get('retry') for c in cfg['seats']) else ''}：{s['residual'][:150]}{'…（完整內容見 audit.json）' if len(s['residual']) > 150 else ''}"
+        residual_note = "任務中的額外文字（重派席位已由程式比對 retry_menu.md 條目，不符者判派發錯誤，無須人工逐字確認）：\n" + "\n".join(
+            f"- 席位 {s['seat']}{'（重派）' if s['retried'] else ''}：{s['residual'][:150]}{'…（完整內容見 audit.json）' if len(s['residual']) > 150 else ''}"
             for s in seats if s["residual"])
 
-    payload = {"seats": seats, "aggregate": agg, "config_errors": cfg_errors}
+    payload = {"seats": seats, "aggregate": agg, "config_errors": cfg_errors,
+               "anchoring_terms": [], "unsourced_numbers": []}
     if a.list_values:
         payload["reported_values"] = collect_values(seats)
     (run / "audit.json").write_text(

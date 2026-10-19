@@ -292,6 +292,16 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
       <div id="matrix"></div>
     </section>
 
+    <section id="sec-excluded" aria-labelledby="h-excluded" hidden>
+      <h2 id="h-excluded">未計入圖表的席位</h2>
+      <div id="excluded"></div>
+    </section>
+
+    <section id="sec-audit-notes" aria-labelledby="h-audit-notes" hidden>
+      <h2 id="h-audit-notes">稽核提示</h2>
+      <div id="audit-notes"></div>
+    </section>
+
     <section aria-labelledby="h-reports">
       <h2 id="h-reports">席位原始報告</h2>
       <div id="reports" class="reports"></div>
@@ -429,7 +439,8 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
         "verdict": "通過",
         "retried": false,
         "excluded_by_role_check": true,
-        "warnings": ["角色檢查：報告內容偏離本席職責，未計入票數"],
+        "role_check_reason": "報告內容偏離本席職責，未回應必答問題",
+        "warnings": [],
         "isolation": [],
         "dispatch": [],
         "residual": null,
@@ -479,8 +490,10 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
       {
         "seat": 6,
         "conversation_id": "sample-conv-06",
-        "verdict": "通過",
-        "isolation": [],
+        "verdict": "未稽核",
+        "isolation": [
+          "transcript 路徑不符 <brain>/<conversation_id>/.system_generated/logs/transcript_full.jsonl，腳本未讀取該檔"
+        ],
         "dispatch": [],
         "residual": null,
         "format_errors": [],
@@ -499,7 +512,12 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
           "人因可持續性": 2
         },
         "chars": 375,
-        "report": "【席位】人因審查員 (The Behavioral Auditor)\n【立場裁定】要求推倒重構\n【信心程度】中 —— 簡報未說明值班輪替與跨團隊溝通的現行做法\n【六維評分】生存安全 4/10｜上限潛力 6/10｜執行可行性 3/10｜長期穩定 4/10｜假設穩健度 5/10｜人因可持續性 2/10\n【最強支持理由】明確的服務邊界能讓各團隊的責任歸屬比單體時代更清楚。\n【致命盲點】\n1. 場景：值班人數不變，卻要同時顧多個服務的告警，疲勞後告警被忽略，事故回應時間拉長。\n   - 發生機率：高｜衝擊：致命\n   - 論據性質：[推測]\n2. 場景：跨團隊約定的介面文件靠自覺維護，數月後與實際行為不符，整合問題集中在上線當天爆發。\n   - 發生機率：中｜衝擊：重大\n   - 論據性質：[假設]\n【防禦性底線】\n1. 每個服務必須指派唯一負責團隊與值班表，未指派者不得上線。\n2. 介面契約以自動化測試強制檢查，不依賴人工維護的文件。"
+        "report": "【席位】人因審查員 (The Behavioral Auditor)\n【立場裁定】要求推倒重構\n【信心程度】中 —— 簡報未說明值班輪替與跨團隊溝通的現行做法\n【六維評分】生存安全 4/10｜上限潛力 6/10｜執行可行性 3/10｜長期穩定 4/10｜假設穩健度 5/10｜人因可持續性 2/10\n【最強支持理由】明確的服務邊界能讓各團隊的責任歸屬比單體時代更清楚。\n【致命盲點】\n1. 場景：值班人數不變，卻要同時顧多個服務的告警，疲勞後告警被忽略，事故回應時間拉長。\n   - 發生機率：高｜衝擊：致命\n   - 論據性質：[推測]\n2. 場景：跨團隊約定的介面文件靠自覺維護，數月後與實際行為不符，整合問題集中在上線當天爆發。\n   - 發生機率：中｜衝擊：重大\n   - 論據性質：[假設]\n【防禦性底線】\n1. 每個服務必須指派唯一負責團隊與值班表，未指派者不得上線。\n2. 介面契約以自動化測試強制檢查，不依賴人工維護的文件。",
+        "warnings": [
+          "未稽核：隔離與派發未經腳本驗證，不計入圖表"
+        ],
+        "excluded_by_role_check": false,
+        "retried": false
       }
     ],
     "aggregate": {
@@ -507,13 +525,12 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
         1,
         2,
         3,
-        5,
-        6
+        5
       ],
       "stance_distribution": {
         "支持推進": 1,
         "有條件推進": 1,
-        "要求推倒重構": 2,
+        "要求推倒重構": 1,
         "強烈否決": 1
       },
       "tears": [
@@ -540,44 +557,48 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
             1
           ],
           "gap": 5
-        },
-        {
-          "dimension": "人因可持續性",
-          "high": [
-            7,
-            2
-          ],
-          "low": [
-            2,
-            6
-          ],
-          "gap": 5
         }
       ]
-    }
+    },
+    "anchoring_terms": [
+      {
+        "term": "微服務",
+        "seats": [
+          2,
+          5
+        ]
+      }
+    ],
+    "unsourced_numbers": [
+      {
+        "value": "30%",
+        "context": "預期部署頻率提升 30%，簡報與各席報告均未出現此數字"
+      }
+    ]
   },
   "synthesis": {
     "absent_reasons": {
-      "4": "離題排除（角色檢查未通過，原始報告仍保留供參考）"
+      "4": "離題排除（角色檢查未通過，原始報告仍保留供參考）",
+      "6": "未稽核（transcript 路徑不符，未計入圖表；原始報告仍保留供參考）"
     },
     "conflicts": [
       "席位 2（支持推進）主張立即拆分，以換取獨立發版與擴縮；席位 1（強烈否決）認為拆分會擴大爆炸半徑並帶來資料一致性風險。兩者在「上限潛力」上分差最大（10 對 4），取捨取決於使用者對生存下限與成長速度的權重。",
       "席位 5 質疑「單體無法水平擴展」這個拆分前提，與席位 2 以擴展需求為由主張拆分的立場直接衝突；兩者都未取得流量與部署的實際數據。"
     ],
     "high_risk_blind_spots": [
-      "席位 6：值班人數不變、告警量增加，疲勞後告警被忽略（機率高、衝擊致命，論據為 [推測]，需事後以實際值班紀錄驗證）。",
+      "席位 6（未稽核，僅供參考）：值班人數不變、告警量增加，疲勞後告警被忽略（機率高、衝擊致命，論據為 [推測]，需事後以實際值班紀錄驗證）。",
       "席位 3、席位 5：團隊維運能力不足，以及拆成分散式單體（機率高、衝擊重大，論據為 [假設]／[推測]，為關鍵結論所依賴，優先驗證）。",
       "席位 1：雙寫期資料不一致（機率中、衝擊致命）與重試風暴（機率中、衝擊重大）。"
     ],
     "tendency": {
       "result": "部分一致",
-      "text": "使用者原始傾向為傾向拆分（見立場剝除紀錄）。基於席位 2 的獨立發版收益與席位 5 的有條件推進，方向部分一致；但席位 1、3、6 皆反對一次性全面拆分，要求縮小範圍，或先備妥回退與值班機制。"
+      "text": "使用者原始傾向為傾向拆分（見立場剝除紀錄）。基於席位 2 的獨立發版收益與席位 5 的有條件推進，方向部分一致；但席位 1、3 皆反對一次性全面拆分，要求縮小範圍，或先備妥回退與值班機制。"
     },
     "coverage": [
-      "到席 5/6。",
+      "到席 4/6（未稽核與離題排除不計入）。",
       "缺席：席位 4（二階效應分析師），盲區類型為長期連鎖反應、反饋循環與非預期副作用。",
-      "未稽核席位：無。",
-      "稽核結果：席位 1、2、3、5、6 通過；席位 3 首次因缺少評分判為格式不合格，重派後通過；席位 4 重派後仍未回傳報告，標為缺席。"
+      "未稽核席位：席位 6（人因審查員），transcript 路徑不符，原始報告保留但不計入圖表。",
+      "稽核結果：席位 1、2、3、5 通過；席位 3 首次因缺少評分判為格式不合格，重派後通過；席位 4 離題排除；席位 6 未稽核。"
     ],
     "baseline_dispositions": [
       {
@@ -631,44 +652,50 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
     ],
     "plan": [
       {
-        "time": "拆分前", "text": "拆分前先建立可一鍵回退到單體的切換機制，並完成一次演練。",
+        "time": "拆分前",
+        "text": "拆分前先建立可一鍵回退到單體的切換機制，並完成一次演練。",
         "sources": [
           1
         ]
       },
       {
-        "time": "第一階段", "text": "第一階段只選痛點最大的一個模組抽出試行，其餘維持單體，並先整理出清楚的模組邊界。",
+        "time": "第一階段",
+        "text": "第一階段只選痛點最大的一個模組抽出試行，其餘維持單體，並先整理出清楚的模組邊界。",
         "sources": [
           3,
           5
         ]
       },
       {
-        "time": "動工前", "text": "服務邊界依業務邊界劃分，動工前完成邊界評審。",
+        "time": "動工前",
+        "text": "服務邊界依業務邊界劃分，動工前完成邊界評審。",
         "sources": [
           2
         ]
       },
       {
-        "time": "每個服務上線前", "text": "每個新服務上線前須具備獨立的監控、告警與回溯機制，並指派唯一負責團隊與值班表。",
+        "time": "每個服務上線前",
+        "text": "每個新服務上線前須具備獨立的監控、告警與回溯機制，並指派唯一負責團隊與值班表。",
         "sources": [
           1,
           6
         ]
       },
       {
-        "time": "試行前", "text": "試行前先以流量與部署數據驗證單體是否確實無法水平擴展，結果作為是否繼續的依據。",
+        "time": "試行前",
+        "text": "試行前先以流量與部署數據驗證單體是否確實無法水平擴展，結果作為是否繼續的依據。",
         "sources": [
           5
         ]
       },
       {
-        "time": "排程前", "text": "試行的成功與停止指標、過渡期起訖日，與團隊確認後再納入排程。",
+        "time": "排程前",
+        "text": "試行的成功與停止指標、過渡期起訖日，與團隊確認後再納入排程。",
         "sources": []
       }
     ],
     "conclusion": "有條件推進：不一次性全面拆分，先備妥一鍵回退與值班歸屬，只抽出痛點最大的一個模組試行。",
-      "circuit_breakers": [
+    "circuit_breakers": [
       "試行模組上線後，若出現無法在一次值班內修復的資料不一致，立即切回單體並暫停後續拆分。",
       "若再次發生告警被忽略或回應延遲的事件，暫停新增服務並重新召開審查。",
       "席位 4 缺席造成的長期連鎖效應盲區，須在試行結束前補開一次審查，否則不得擴大拆分。"
@@ -753,6 +780,16 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
     return { entry: pool[pool.length - 1], count: list.length };
   }
 
+  function firstReason(e) {
+    var list = arr(e && e.isolation).concat(arr(e && e.dispatch));
+    for (var i = 0; i < list.length; i++) {
+      var x = list[i];
+      if (typeof x === 'string' && x.length) return x;
+      if (x && typeof x === 'object') return JSON.stringify(x);
+    }
+    return '（稽核未提供判定理由）';
+  }
+
   function buildModel(data) {
     var audit = data && data.audit;
     if (!audit || !Array.isArray(audit.seats) || !audit.aggregate || typeof audit.aggregate !== 'object') {
@@ -764,13 +801,18 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
     var validList = arr(agg.valid_seats).map(Number);
     var seats = ROLES.map(function (r) {
       var p = pickEntry(audit.seats, r.n);
-      var inValid = validList.indexOf(r.n) >= 0 && !!p.entry;
+      // 圖表席位 = aggregate.valid_seats 與「verdict 通過且未被離題排除」的交集（舊 audit.json 可能把未稽核放進 valid_seats）。
+      var passed = !!(p.entry && p.entry.verdict === '通過' && p.entry.excluded_by_role_check !== true);
+      var inValid = validList.indexOf(r.n) >= 0 && passed;
+      var unaudited = !!(p.entry && p.entry.verdict === '未稽核' && p.entry.excluded_by_role_check !== true);
       var reason = '';
       if (!inValid) {
         reason = str(reasons[String(r.n)]) || (p.entry ? str(p.entry.verdict, '無稽核判定') : '無執行紀錄');
       }
       return {
         n: r.n, zh: r.zh, en: r.en, entry: p.entry, count: p.count, valid: inValid, reason: reason,
+        unaudited: unaudited, label: unaudited ? '未稽核' : '缺席',
+        auditReason: unaudited ? firstReason(p.entry) : '',
         retried: !!(p.entry && p.entry.retried === true),
         excluded: !!(p.entry && p.entry.excluded_by_role_check === true),
         scores: (p.entry && p.entry.scores && typeof p.entry.scores === 'object') ? p.entry.scores : {},
@@ -778,7 +820,12 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
       };
     });
     var attended = seats.filter(function (s) { return s.valid; }).length;
-    return { meta: (data.meta && typeof data.meta === 'object') ? data.meta : {}, agg: agg, syn: syn, seats: seats, attended: attended };
+    // 立場分布只由圖表席位重新統計，不信任 aggregate.stance_distribution。
+    var dist = {};
+    seats.forEach(function (s) { if (s.valid && stanceIdx(s.stance) >= 0) dist[s.stance] = (dist[s.stance] || 0) + 1; });
+    agg = Object.assign({}, agg, { stance_distribution: dist });
+    return {
+      anchoring: arr(audit.anchoring_terms), unsourced: arr(audit.unsourced_numbers), meta: (data.meta && typeof data.meta === 'object') ? data.meta : {}, agg: agg, syn: syn, seats: seats, attended: attended };
   }
 
   // ---------- 區塊渲染 ----------
@@ -863,7 +910,11 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
         el('span', { 'class': 'cnt' }, c, el('span', { 'class': 'sub' }, c === DASH ? '' : ' 席'))));
     });
 
-    var tears = arr(m.agg.tears);
+    var validNums = m.seats.filter(function (s) { return s.valid; }).map(function (s) { return s.n; });
+    var tears = arr(m.agg.tears).filter(function (t) {
+      return t && arr(t.high).concat(arr(t.low)).every(function (x, i) { return i % 2 === 0 || validNums.indexOf(Number(x)) >= 0; }) &&
+        arr(t.high)[1] !== undefined && arr(t.low)[1] !== undefined;
+    });
     var tearBody;
     if (tears.length) {
       var tbody = el('tbody');
@@ -954,19 +1005,19 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
     var absentCount = m.seats.filter(function (s) { return !s.valid; }).length;
     var note = document.getElementById('absent-note');
     note.hidden = absentCount === 0;
-    note.textContent = absentCount ? absentCount + ' 席缺席' : '';
+    note.textContent = absentCount ? absentCount + ' 席未計入' : '';
 
     var cards = m.seats.map(function (s) {
       var head = el('div', { 'class': 'top' },
         el('div', null, el('div', { 'class': 'seatno' }, '席位 ' + s.n), el('div', { 'class': 'role' }, s.zh),
           el('div', { 'class': 'seatno' }, s.en)),
         el('div', { 'class': 'chips-inline' },
-          s.valid ? stanceChip(s.stance) : chip('缺席', 'absent'),
+          s.valid ? stanceChip(s.stance) : chip(s.label, s.unaudited ? 'warn' : 'absent'),
           s.retried ? chip('已重派', 'warn') : null,
           s.excluded ? chip('離題排除', 'bad') : null));
       var body;
       if (!s.valid) {
-        body = el('div', { 'class': 'absent-body' }, el('span', { 'class': 'tag' }, '【缺席】'), '原因：' + s.reason);
+        body = el('div', { 'class': 'absent-body' }, el('span', { 'class': 'tag' }, '【' + s.label + '】'), '原因：' + s.reason);
       } else if (!DIMS.every(function (d) { return isNum(s.scores[d]); })) {
         body = el('div', { 'class': 'absent-body' }, '評分資料不完整，無法繪製雷達圖。');
       } else {
@@ -980,7 +1031,10 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
   // ----- 評分矩陣 -----
   function renderMatrix(m) {
     var tearDims = {};
-    arr(m.agg.tears).forEach(function (t) { if (t && t.dimension) tearDims[t.dimension] = true; });
+    var vn = m.seats.filter(function (s) { return s.valid; }).map(function (s) { return s.n; });
+    arr(m.agg.tears).forEach(function (t) {
+      if (t && t.dimension && vn.indexOf(Number(arr(t.high)[1])) >= 0 && vn.indexOf(Number(arr(t.low)[1])) >= 0) tearDims[t.dimension] = true;
+    });
 
     var headRow = el('tr', null, el('th', { scope: 'col' }, '席位'));
     DIMS.forEach(function (d) {
@@ -1004,17 +1058,58 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
           tr.appendChild(el('td', { 'class': 'n empty' }, DASH));
         }
       });
-      tr.appendChild(el('td', null, s.valid ? stanceChip(s.stance) : chip('缺席', 'absent')));
+      tr.appendChild(el('td', null, s.valid ? stanceChip(s.stance) : chip(s.label, s.unaudited ? 'warn' : 'absent')));
       tbody.appendChild(tr);
     });
 
     mount('matrix', [
       el('div', { 'class': 'tablewrap', tabindex: '0', role: 'region', 'aria-label': '評分矩陣（可橫向捲動）' },
         el('table', { 'class': 'wide' },
-          el('caption', { 'class': 'sr' }, '各席位六維評分，缺席席位以破折號表示'),
+          el('caption', { 'class': 'sr' }, '各席位六維評分，未計入席位以破折號表示'),
           el('thead', null, headRow), tbody)),
-      el('p', { 'class': 'matrix-note' }, '色階越深分數越高；缺席席位不計分。此表同時是上方雷達圖的表格檢視。')
+      el('p', { 'class': 'matrix-note' }, '色階越深分數越高；未稽核、離題排除與缺席席位不計分。此表同時是上方雷達圖的表格檢視。')
     ]);
+  }
+
+  // ----- 未計入圖表的席位、稽核提示 -----
+  function renderExcluded(m) {
+    var un = m.seats.filter(function (s) { return s.unaudited; });
+    var off = m.seats.filter(function (s) { return s.excluded; });
+    var sec = document.getElementById('sec-excluded');
+    sec.hidden = !(un.length || off.length);
+    if (sec.hidden) { mount('excluded', []); return; }
+    function names(list, fn) {
+      return list.length ? el('ul', null, list.map(function (s) { return el('li', null, fn(s)); })) : emptyNote('無。');
+    }
+    mount('excluded', [
+      el('div', { 'class': 'block' }, el('h3', null, '未稽核席位（不計入圖表，原始報告仍保留）'),
+        names(un, function (s) { return '席位 ' + s.n + ' ' + s.zh + '：' + s.auditReason; })),
+      el('div', { 'class': 'block' }, el('h3', null, '離題排除席位（不計入圖表，原始報告仍保留）'),
+        names(off, function (s) {
+          var w = s.entry && typeof s.entry.role_check_reason === 'string' ? s.entry.role_check_reason : '';
+          return '席位 ' + s.n + ' ' + s.zh + (w ? '：' + w : '');
+        }))
+    ]);
+  }
+
+  function renderAuditNotes(m) {
+    var sec = document.getElementById('sec-audit-notes');
+    sec.hidden = !(m.anchoring.length || m.unsourced.length);
+    var kids = [];
+    if (m.anchoring.length) {
+      kids.push(el('div', { 'class': 'block' }, el('h3', null, '錨定詞（簡報用詞被多席沿用）'),
+        el('ul', null, m.anchoring.map(function (a) {
+          var seats = arr(a && a.seats).map(function (n) { return '席位 ' + n; }).join('、');
+          return el('li', null, str(a && a.term, DASH) + '：' + (seats || DASH));
+        }))));
+    }
+    if (m.unsourced.length) {
+      kids.push(el('div', { 'class': 'block' }, el('h3', null, '無來源數字（簡報與通過席位報告皆未出現）'),
+        el('ul', null, m.unsourced.map(function (u) {
+          return el('li', null, str(u && u.value, DASH) + '：' + str(u && u.context, DASH));
+        }))));
+    }
+    mount('audit-notes', kids);
   }
 
   // ----- 原始報告 -----
@@ -1024,15 +1119,15 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
       var summary = el('summary', null,
         el('span', { 'class': 'no' }, '席位 ' + s.n),
         el('span', { 'class': 'role' }, s.zh),
-        s.valid ? stanceChip(s.stance) : chip('缺席', 'absent'),
+        s.valid ? stanceChip(s.stance) : chip(s.label, s.unaudited ? 'warn' : 'absent'),
         e.verdict ? chip(e.verdict, e.verdict === '通過' ? 'good' : (e.verdict === '未稽核' ? 'warn' : 'bad'), '稽核') : chip('無紀錄', 'absent', '稽核'),
         s.retried ? chip('已重派', 'warn') : null,
         s.excluded ? chip('離題排除', 'bad') : null);
       var body = el('div', { 'class': 'body' });
       if (!s.valid) {
-        body.appendChild(el('p', { 'class': 'absent-line' }, el('strong', null, '【缺席】'), '原因：' + s.reason));
+        body.appendChild(el('p', { 'class': 'absent-line' }, el('strong', null, '【' + s.label + '】'), '原因：' + s.reason));
       }
-      if (s.valid || (s.excluded && e.report)) {
+      if (s.valid || ((s.excluded || s.unaudited) && e.report)) {
         body.appendChild(el('div', { 'class': 'report-text' }, str(e.report, '（沒有報告全文）')));
         var warns = arr(e.warnings).concat(arr(e.format_warnings).filter(function (w) { return arr(e.warnings).indexOf(w) < 0; })).filter(function (w) { return typeof w === 'string' && w.length; });
         if (warns.length) body.appendChild(el('p', { 'class': 'report-warn' }, '稽核警告：' + warns.join('；')));
@@ -1146,6 +1241,8 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
     renderOverview(model);
     renderRadars(model);
     renderMatrix(model);
+    renderExcluded(model);
+    renderAuditNotes(model);
     renderReports(model);
     renderArbitration(model);
     renderDispositions(model);

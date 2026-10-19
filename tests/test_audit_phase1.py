@@ -165,6 +165,7 @@ def test_role_check_valid_quote_excludes(new_run):
     _, audit = run_audit(run)
     s = seat_of(audit, 5)
     assert s["excluded_by_role_check"] is True
+    assert s["role_check_reason"] == "離題"
     assert s["verdict"] == "通過"
     assert 5 not in audit["aggregate"]["valid_seats"]
     assert sum(audit["aggregate"]["stance_distribution"].values()) == 5
@@ -226,7 +227,7 @@ def test_new_fields_present(tmp_path):
     for s in audit["seats"]:
         for k in ("excluded_by_role_check", "retried", "must_answer_count", "warnings"):
             assert k in s, (s["seat"], k)
-        assert s["must_answer_count"] is None
+        assert s["must_answer_count"] == (None if s["verdict"] == "缺席" else 2)
         assert s["warnings"] == s["format_warnings"]
     assert seat_of(audit, 6)["verdict"] == "缺席"
 

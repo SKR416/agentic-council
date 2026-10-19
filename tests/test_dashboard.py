@@ -19,9 +19,10 @@ def _seat(n, **extra):
     return s
 
 
-def _build(tmp_path, seats, synthesis=None, valid=None):
+def _build(tmp_path, seats, synthesis=None, valid=None, extra_audit=None):
     run = make_run(tmp_path / "run")
     audit = {"seats": seats, "aggregate": {"valid_seats": valid if valid is not None else [s["seat"] for s in seats]}}
+    audit.update(extra_audit or {})
     (run["run_dir"] / "audit.json").write_text(json.dumps(audit, ensure_ascii=False), encoding="utf-8")
     data = {"meta": {"title": "測試", "run_id": "t", "generated_at": "x", "dispatch_mode": "標準",
                      "audit_method": "腳本", "retry_count": 0},
@@ -82,3 +83,46 @@ def test_script_tag_in_report_cannot_break_out(tmp_path):
     assert emb["synthesis"]["conflicts"] == [evil]
     body = DATA_RE.search(html).group(1)
     assert "</script" not in body and "<" not in body
+
+
+def test_build_carries_anchoring_and_unsourced(tmp_path):
+    anchors = [{"term": "微服務", "seats": [1, 4]}]
+    unsourced = [{"value": "30%", "context": "提升 30%"}]
+    seats = [_seat(n) for n in range(1, 7)]
+    run, cp, _, _ = _build(tmp_path, seats, extra_audit={"anchoring_terms": anchors, "unsourced_numbers": unsourced})
+    assert cp.returncode == 0, cp.stderr
+    _, emb = _embedded(run)
+    assert emb["audit"]["anchoring_terms"] == anchors
+    assert emb["audit"]["unsourced_numbers"] == unsourced
+
+
+def test_build_defaults_missing_anchoring_and_unsourced_to_empty(tmp_path):
+    run, cp, _, _ = _build(tmp_path, [_seat(n) for n in range(1, 7)])
+    assert cp.returncode == 0, cp.stderr
+    _, emb = _embedded(run)
+    assert emb["audit"]["anchoring_terms"] == []
+    assert emb["audit"]["unsourced_numbers"] == []
+
+
+def test_sample_unaudited_and_excluded_not_in_valid_seats():
+    sample = json.loads(DATA_RE.search(TEMPLATE.read_text(encoding="utf-8")).group(1))
+    seats = sample["audit"]["seats"]
+    valid = sample["audit"]["aggregate"]["valid_seats"]
+    unaudited = [s["seat"] for s in seats if s["verdict"] == "未稽核"]
+    excluded = [s["seat"] for s in seats if s.get("excluded_by_role_check")]
+    assert unaudited and excluded
+    for n in unaudited + excluded:
+        assert n not in valid
+    # 範例彙總自洽：有效席位 = 通過且未排除；立場分布總數 = 有效席位數
+    expect = sorted(s["seat"] for s in seats if s["verdict"] == "通過" and not s.get("excluded_by_role_check"))
+    assert sorted(valid) == expect
+    assert sum(sample["audit"]["aggregate"]["stance_distribution"].values()) == len(valid)
+    assert sample["audit"]["anchoring_terms"] and sample["audit"]["unsourced_numbers"]
+
+
+def test_template_filters_chart_seats_by_verdict_and_exclusion():
+    html = TEMPLATE.read_text(encoding="utf-8")
+    assert "verdict === '通過' && p.entry.excluded_by_role_check !== true" in html
+    assert "validList.indexOf(r.n) >= 0 && passed" in html
+    assert "renderExcluded" in html and "renderAuditNotes" in html
+    assert "anchoring_terms" in html and "unsourced_numbers" in html

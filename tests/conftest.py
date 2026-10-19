@@ -154,6 +154,8 @@ def run_script(script, run, *args):
 
 def run_audit(run, *args):
     """執行稽核腳本，回傳 (CompletedProcess, audit.json 內容或 None)。"""
+    if run.get("brain_dir") and "--brain-dir" not in args:
+        args = (*args, "--brain-dir", run["brain_dir"])
     cp = run_script(AUDIT, run, *args)
     p = Path(run["run_dir"]) / "audit.json"
     return cp, (json.loads(p.read_text(encoding="utf-8")) if p.is_file() else None)

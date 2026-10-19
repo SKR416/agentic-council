@@ -6,7 +6,7 @@ Agentic Council 儀表板產生腳本
     python build_dashboard.py --skill-dir <skill 資料夾> --run-dir <本次執行資料夾>
 
 run-dir 內必須有：
-    audit.json            稽核腳本的輸出（seats 與 aggregate 原封不動帶入頁面）
+    audit.json            稽核腳本的輸出（seats、aggregate、anchoring_terms、unsourced_numbers 帶入頁面；後兩者缺欄位時為空陣列）
     dashboard_input.json  主 Agent 撰寫的內容，格式：
         {
           "meta": {"title": ..., "run_id": ..., "generated_at": ...,
@@ -65,7 +65,12 @@ def main():
 
     data = {
         "meta": {**inp["meta"], "is_sample": False},
-        "audit": {"seats": audit["seats"], "aggregate": audit["aggregate"]},
+        "audit": {
+            "seats": audit["seats"],
+            "aggregate": audit["aggregate"],
+            "anchoring_terms": audit.get("anchoring_terms") or [],
+            "unsourced_numbers": audit.get("unsourced_numbers") or [],
+        },
         "synthesis": inp["synthesis"],
     }
 

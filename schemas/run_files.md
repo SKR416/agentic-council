@@ -78,6 +78,7 @@
       "conversation_id": "...",
       "verdict": "通過 | 派發錯誤 | 隔離違規 | 格式不合格 | 未稽核 | 缺席",
       "excluded_by_role_check": false,
+      "role_check_reason": null,
       "retried": false,
       "must_answer_count": 3,
       "warnings": ["..."],
@@ -95,6 +96,7 @@
 
 - `verdict`：`缺席` 只用於 `seats.json` 沒有登錄的席位。
 - `excluded_by_role_check`：`role_check` 生效時為 true；該席 `verdict` 不變，但不算票。
+- `role_check_reason`：`role_check` 生效時為 seats.json 的 `reason` 字串，否則 null（儀表板顯示用）。
 - `retried`：`seats.json` 有 `retry`（物件或 true）即為 true。
 - `warnings`：與 `format_warnings` 相同內容的別名，供儀表板使用；新程式讀 `warnings`。
 - `must_answer_count`：Phase 1 先填 `null`，A13 完成後填實數。

@@ -25,24 +25,56 @@ run-dir 內必須有：
 """
 import argparse
 import json
+import os
 import re
 import sys
+import unicodedata
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.parse import unquote, urlparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from transcripts import agy as tx_adapter  # noqa: E402
+from transcripts.agy import TranscriptFormatError  # noqa: E402
+
+# 供外部（含測試）沿用舊名稱
+load_transcript = tx_adapter.load
+extract_prompt = tx_adapter.extract_prompt
+extract_tool_calls = tx_adapter.extract_tool_calls
 
 ALLOWED_TOOLS = {"search_web", "read_url_content"}
 STANCES = ["支持推進", "有條件推進", "要求推倒重構", "強烈否決"]
 DIMENSIONS = ["生存安全", "上限潛力", "執行可行性", "長期穩定", "假設穩健度", "人因可持續性"]
-REQUIRED_FIELDS = ["【席位】", "【立場裁定】", "【信心程度】", "【六維評分】",
+REQUIRED_FIELDS = ["【席位】", "【立場裁定】", "【信心程度】", "【六維評分】", "【必答回應】",
                    "【最強支持理由】", "【致命盲點】", "【防禦性底線】"]
-CHAR_LIMIT_DEFAULT = 900
+# 字數建議上限（D2）：超過只記警告。A14 會加上 --char-limit 覆寫。
+CHAR_LIMIT_DEFAULT = 1200
 # 席位 5（逆向破局者）的職責比其他席位多一整段「完全相反的做法＋其最強論證」，
 # 用同一個上限會系統性地把這一席判出局，因此單獨放寬。
-CHAR_LIMIT_BY_SEAT = {5: 1200}
+CHAR_LIMIT_BY_SEAT = {5: 1500}
+MUST_ANSWER_MIN = 2      # 【必答回應】至少要答的題數（D6）
+ANCHOR_MIN_SEATS = 2     # 幾位評審用到同一個題目用詞，就列入錨定清單（D7）
+ANCHOR_MAX_TERMS = 20    # 錨定清單最多列幾筆
+ANCHOR_CJK_MIN, ANCHOR_CJK_MAX = 4, 12   # CJK 候選詞長度範圍（連續 CJK 字元的子字串）
+ANCHOR_WORD_MIN = 3      # 英數單字候選詞最短長度
+RETRY_HINT_MAX = 2       # 重派任務最多附幾條 retry_menu.md 條目（D5）
 
 
-def char_limit(seat_no):
-    return CHAR_LIMIT_BY_SEAT.get(seat_no, CHAR_LIMIT_DEFAULT)
+def build_char_limits(general=None, seat5=None):
+    """--char-limit N 覆寫一般席位上限，席位 5 依 1500/1200 比例放寬；--char-limit-seat5 M 直接指定席位 5。"""
+    limits = {"default": CHAR_LIMIT_DEFAULT, **CHAR_LIMIT_BY_SEAT}
+    if general is not None:
+        limits["default"] = general
+        for k, v in CHAR_LIMIT_BY_SEAT.items():
+            limits[k] = round(general * v / CHAR_LIMIT_DEFAULT)
+    if seat5 is not None:
+        limits[5] = seat5
+    return limits
+
+
+def char_limit(seat_no, limits=None):
+    limits = limits or build_char_limits()
+    return limits.get(seat_no, limits["default"])
 TEAR_THRESHOLD = 5
 PROB_VALUES = ("高", "中", "低")
 IMPACT_VALUES = ("致命", "重大", "可控")
@@ -69,70 +101,79 @@ def to_path(ref):
     return Path(ref)
 
 
-def decode_arg(value):
-    """transcript 中的工具參數常是二次編碼的 JSON 字串，例如 "\"abc\""。"""
-    if isinstance(value, str):
-        s = value.strip()
-        if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
-            try:
-                return json.loads(s)
-            except json.JSONDecodeError:
-                return s[1:-1]
-    return value
+def load_menu(skill_dir, prefix="R"):
+    """解析 templates/retry_menu.md 的條目：{編號: 條目全文}。讀不到回傳空表。"""
+    try:
+        text = (Path(skill_dir) / "templates" / "retry_menu.md").read_text(encoding="utf-8")
+    except Exception:
+        return {}
+    out = {}
+    for line in text.replace("\r\n", "\n").split("\n"):
+        m = re.match(rf"^- ({prefix}\d+)\s+(.+)$", line.rstrip())
+        if m and m.group(1) not in out:
+            out[m.group(1)] = m.group(2).strip()
+    return out
 
 
-def load_transcript(path):
-    entries = []
-    with open(path, encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                entries.append(json.loads(line))
-    return entries
-
-
-def extract_prompt(entries):
-    for e in entries:
-        if e.get("type") == "SYSTEM_MESSAGE" and "content=" in e.get("content", ""):
-            c = e["content"]
-            start = c.index("content=", c.index("[Message]") if "[Message]" in c else 0) + len("content=")
-            end = c.rfind("</SYSTEM_MESSAGE>")
-            return c[start:end] if end > start else c[start:]
+def retry_info(seat):
+    """回傳 None（非重派）或 {"hint_ids": [...], "valid": bool}。"""
+    r = seat.get("retry")
+    if r is True:
+        return {"hint_ids": [], "valid": True}
+    if isinstance(r, dict):
+        ids = r.get("hint_ids", [])
+        ok = isinstance(ids, list) and all(isinstance(i, str) for i in ids)
+        return {"hint_ids": ids if ok else [], "valid": ok}
     return None
 
 
-def normalize_args(raw):
-    """args 可能是 dict，也可能整包是一串 JSON 字串；兩種都要能處理。
-
-    無法解析時回傳 {"_unparsed": <原值>}，讓後續檢查把它當成「收件者不明」，
-    而不是讓單一席位的格式異常中斷整批稽核。
-    """
-    if isinstance(raw, dict):
-        return {k: decode_arg(v) for k, v in raw.items()}
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw)
-        except json.JSONDecodeError:
-            return {"_unparsed": raw}
-        if isinstance(parsed, dict):
-            return {k: decode_arg(v) for k, v in parsed.items()}
-        return {"_unparsed": raw}
-    if raw is None:
-        return {}
-    return {"_unparsed": raw}
+def check_retry_residual(residual, hint_ids, menu):
+    """重派殘留必須依序等於 hint_ids 對應的選單條目。回傳錯誤訊息清單。"""
+    errs = []
+    if len(hint_ids) > RETRY_HINT_MAX:
+        errs.append(f"重派附了 {len(hint_ids)} 個提示編號，超過上限 {RETRY_HINT_MAX}")
+    unknown = [i for i in hint_ids if i not in menu]
+    if unknown:
+        errs.append(f"hint_ids 不在 retry_menu.md：{', '.join(unknown)}")
+    if errs:
+        return errs
+    expected = [menu[i] for i in hint_ids]
+    actual = [l.strip() for l in (residual or "").split("\n") if l.strip()]
+    if actual != expected:
+        errs.append("重派任務的額外文字與 hint_ids 對應的 retry_menu.md 條目不符"
+                    f"（預期 {len(expected)} 行選單原文，實際 {len(actual)} 行：{' / '.join(actual)[:100]}）")
+    return errs
 
 
-def extract_tool_calls(entries):
-    calls = []
-    for e in entries:
-        if not isinstance(e, dict):
-            continue
-        for tc in e.get("tool_calls") or []:
-            if not isinstance(tc, dict):
-                continue
-            calls.append({"step": e.get("step_index"), "name": tc.get("name"),
-                          "args": normalize_args(tc.get("args"))})
-    return calls
+def role_sections(role_text):
+    """切出角色卡「必答問題：」與「禁止：」兩段（到下一個空行為止）。"""
+    out = []
+    lines = norm(role_text).split("\n")
+    for i, l in enumerate(lines):
+        if l.strip() in ("必答問題：", "禁止：", "必答問題:", "禁止:"):
+            seg = []
+            for x in lines[i + 1:]:
+                if not x.strip():
+                    break
+                seg.append(x)
+            out.append("\n".join(seg))
+    return out
+
+
+def check_role_check(seat, role_text):
+    """回傳 (excluded, error_or_None)。只有 pass is False 才生效。"""
+    rc = seat.get("role_check")
+    if not isinstance(rc, dict) or rc.get("pass") is not False:
+        return False, None
+    q = rc.get("quote")
+    n = seat.get("seat")
+    if not isinstance(q, str) or not norm(q):
+        return False, f"席位 {n} 的 role_check 缺少 quote，已忽略此排除"
+    # 必須引用完整的一條，不接受片段：否則引用「風險」兩個字就能排除任何一席。
+    items = {re.sub(r"^[-*]\s*", "", l.strip()) for sec in role_sections(role_text) for l in sec.split("\n")}
+    if re.sub(r"^[-*]\s*", "", norm(q)) in items:
+        return True, None
+    return False, f"席位 {n} 的 role_check.quote 不是角色卡「必答問題」或「禁止」段落中完整的一條，已忽略此排除"
 
 
 def check_prompt(prompt, brief, role, schema):
@@ -167,8 +208,8 @@ def split_fields(r):
 
 
 def check_blind_spots(section):
-    """逐個致命盲點檢查枚舉值與來源網址，而不是全文計數。"""
-    errors = []
+    """逐個致命盲點檢查枚舉值與來源網址，而不是全文計數。回傳 (盲點數, 錯誤, 標 [外部來源] 的盲點數)。"""
+    errors, external = [], 0
     blocks = [b for b in re.split(r"場景\s*[:：]", section)[1:]]
     for n, b in enumerate(blocks, 1):
         m = re.search(r"發生機率\s*[:：]\s*([^\s｜|，,。]+)", b)
@@ -189,20 +230,42 @@ def check_blind_spots(section):
             if not any(v in basis for v in BASIS_VALUES):
                 errors.append(f"盲點 {n} 的論據性質不是四選一：{basis.strip()[:20]}")
             # [外部來源] 必須在「這一個」盲點內附網址，不能靠全文其他地方的網址充數
-            if "[外部來源]" in basis and not re.search(r"https?://", b):
-                errors.append(f"盲點 {n} 標註 [外部來源] 但該盲點內未附網址")
-    return len(blocks), errors
+            if "[外部來源]" in basis:
+                external += 1
+                if not re.search(r"https?://", b):
+                    errors.append(f"盲點 {n} 標註 [外部來源] 但該盲點內未附網址")
+    return len(blocks), errors, external
 
 
-def validate_report(report, limit, expected_role=None):
+def _head(body):
+    """欄位內容去掉開頭的冒號、空白與粗體 **。"""
+    return re.sub(r"^[\s*:：]+", "", body or "")
+
+
+def field_order_warning(r):
+    pos = [(r.find(f), f) for f in REQUIRED_FIELDS if r.find(f) >= 0]
+    if [f for _, f in sorted(pos)] != [f for _, f in pos]:
+        return "欄位順序與規格不同（僅警告）：" + "".join(f for _, f in sorted(pos))
+    return None
+
+
+def count_must_answers(body):
+    """依 run_files.md 的 regex 計數不重複的 Q 題號（行首 Q<n>：後須有內容）。"""
+    return len(set(re.findall(r"^\s*Q(\d+)\s*[:：]\s*\S", body or "", re.M)))
+
+
+def validate_report(report, limit, expected_role=None, tools_used=None):
     errors, warnings = [], []
-    result = {"stance": None, "scores": {}, "chars": 0}
+    result = {"stance": None, "scores": {}, "chars": 0, "must_answer_count": None}
     if not report:
         return ["沒有回傳任何報告"], warnings, result
     r = norm(report)
     for field in REQUIRED_FIELDS:
         if field not in r:
             errors.append(f"缺少欄位 {field}")
+    w = field_order_warning(r)
+    if w:
+        warnings.append(w)
     fields = split_fields(r)
     for field, body in fields.items():
         if not body:
@@ -211,18 +274,24 @@ def validate_report(report, limit, expected_role=None):
         seat_body = fields.get("【席位】", "")
         if seat_body and expected_role not in seat_body:
             errors.append(f"【席位】自報「{seat_body[:20]}」與角色卡「{expected_role}」不符")
-    m = re.search(r"【立場裁定】\s*([^\n]+)", r)
-    if m:
-        val = m.group(1).strip()
+    # 立場、信心、六維分數只在對應欄位內擷取（A9）
+    if "【立場裁定】" in fields:
+        body = _head(fields["【立場裁定】"])
+        val = re.sub(r"\*", "", body.split("\n")[0]).strip() if body else ""
         if val in STANCES:
             result["stance"] = val
-        else:
+        elif body:
             errors.append(f"立場不是四選一：{val}")
-    m = re.search(r"【信心程度】\s*(\S)", r)
-    if m and m.group(1) not in "高中低":
-        errors.append("信心程度不是高/中/低")
+    if "【信心程度】" in fields:
+        body = re.sub(r"\*", "", _head(fields["【信心程度】"]))
+        m = re.match(r"(高|中|低)(?![\u4e00-\u9fff])", body)
+        if body and not m:
+            errors.append("信心程度不是高/中/低")
+        elif m and not re.sub(r"^[\s—\-－–:：,，、（()）]+", "", body[1:]).strip(" )）"):
+            errors.append("信心程度缺少說明（格式：高/中/低 —— 一句話說明）")
+    score_body = re.sub(r"\*", "", fields.get("【六維評分】", ""))
     for dim in DIMENSIONS:
-        m = re.search(re.escape(dim) + r"\s*(\d+)\s*/\s*10", r)
+        m = re.search(re.escape(dim) + r"\s*[:：]?\s*(\d+)\s*/\s*10", score_body)
         if not m:
             errors.append(f"缺少評分：{dim}")
             continue
@@ -230,10 +299,19 @@ def validate_report(report, limit, expected_role=None):
         if not 1 <= v <= 10:
             errors.append(f"評分超出範圍：{dim}={v}")
         result["scores"][dim] = v
-    n_scene, spot_errors = check_blind_spots(fields.get("【致命盲點】", ""))
+    if "【必答回應】" in fields:
+        n = count_must_answers(fields["【必答回應】"])
+        result["must_answer_count"] = n
+        if n < MUST_ANSWER_MIN:
+            errors.append(f"【必答回應】只有 {n} 題，至少要 {MUST_ANSWER_MIN} 題（格式 Q<n>：<回應>）")
+    else:
+        result["must_answer_count"] = 0
+    n_scene, spot_errors, n_external = check_blind_spots(fields.get("【致命盲點】", ""))
     if not 1 <= n_scene <= 2:
         errors.append(f"致命盲點數量應為 1–2，實際 {n_scene}")
     errors += spot_errors
+    if n_external and tools_used is not None and not any(t in ALLOWED_TOOLS for t in tools_used):
+        errors.append("標註 [外部來源] 但 transcript 沒有任何 search_web 或 read_url_content 呼叫")
     chars = len(re.sub(r"\s", "", r))
     result["chars"] = chars
     if chars > limit:
@@ -243,17 +321,71 @@ def validate_report(report, limit, expected_role=None):
     return errors, warnings, result
 
 
-def audit_seat(seat, parent_id, brief, roles, schema):
-    out = {"seat": seat["seat"], "conversation_id": seat.get("conversation_id"),
-           "verdict": None, "isolation": [], "dispatch": [], "residual": None,
-           "format_errors": [], "format_warnings": [], "tools_used": [],
-           "stance": None, "scores": {}, "chars": 0}
-    path = to_path(seat["transcript"])
+def new_row(seat_no, conv, retried=False):
+    return {"seat": seat_no, "conversation_id": conv,
+            "verdict": None, "excluded_by_role_check": False, "role_check_reason": None, "retried": retried,
+            "must_answer_count": None, "warnings": [],
+            "isolation": [], "dispatch": [], "residual": None,
+            "format_errors": [], "format_warnings": [], "tools_used": [],
+            "stance": None, "scores": {}, "chars": 0, "report": ""}
+
+
+DEFAULT_BRAIN_DIRS = ("~/.gemini/antigravity/brain", "~/.gemini/antigravity-cli/brain")
+
+
+def _key(p):
+    return os.path.normcase(str(Path(p).resolve()))
+
+
+def check_transcript_path(path, conv, brain_dirs):
+    """D3：路徑必須是 <brain>/<conversation_id>/.system_generated/logs/transcript_full.jsonl。
+
+    回傳錯誤訊息或 None。只比對路徑字串，不讀檔。
+    """
+    if not isinstance(conv, str) or not conv or conv in (".", "..") or re.search(r"[\\/]", conv):
+        return f"conversation_id 不合法：{conv!r}"
     try:
-        entries = load_transcript(path)
+        actual = _key(path)
+        for b in brain_dirs:
+            if actual == _key(Path(b) / conv / ".system_generated" / "logs" / "transcript_full.jsonl"):
+                return None
+    except (OSError, ValueError) as e:
+        return f"transcript 路徑無法解析：{e!r}"
+    return (f"transcript 路徑不符：必須是 <brain>/{conv}/.system_generated/logs/transcript_full.jsonl"
+            f"（實際 {str(path)[:120]}），未讀取該檔")
+
+
+def audit_seat(seat, parent_id, brief, roles, schema, menu=None, config_errors=None,
+               brain_dirs=None, char_limits=None):
+    menu = menu or {}
+    brain_dirs = list(brain_dirs) if brain_dirs is not None else [os.path.expanduser(d) for d in DEFAULT_BRAIN_DIRS]
+    config_errors = config_errors if config_errors is not None else []
+    retry = retry_info(seat)
+    out = new_row(seat["seat"], seat.get("conversation_id"), seat.get("retry") not in (None, False))
+    out["warnings"] = out["format_warnings"]      # 同一個清單，之後的警告自動同步
+    try:
+        out["excluded_by_role_check"], err = check_role_check(seat, roles.get(seat["seat"], ""))
+        if out["excluded_by_role_check"]:
+            out["role_check_reason"] = str(seat["role_check"].get("reason") or "")
+        if err:
+            config_errors.append(err)
+    except Exception as e:
+        config_errors.append(f"席位 {seat['seat']} 的 role_check 無法解析：{e!r}")
+    try:
+        path = to_path(seat["transcript"])
+        perr = check_transcript_path(path, seat.get("conversation_id"), brain_dirs)
+        if perr:
+            out["verdict"] = "未稽核"
+            out["isolation"].append(perr)
+            return out
+        entries = tx_adapter.load(path)
+    except TranscriptFormatError as e:
+        out["verdict"] = "未稽核"
+        out["isolation"].append(str(e))
+        return out
     except Exception as e:
         out["verdict"] = "未稽核"
-        out["isolation"].append(f"無法讀取 transcript：{e}")
+        out["isolation"].append(f"無法讀取 transcript：{e!r}")
         return out
 
     issues, residual = check_prompt(extract_prompt(entries), brief, roles[seat["seat"]], schema)
@@ -278,16 +410,23 @@ def audit_seat(seat, parent_id, brief, roles, schema):
     if len(reports) > 1:
         out["format_warnings"].append(f"回傳了 {len(reports)} 則訊息，以最後一則為準")
     errs, warns, res = validate_report(reports[-1] if reports else None,
-                                   char_limit(seat["seat"]),
-                                   role_name(roles.get(seat["seat"], "")))
+                                   char_limit(seat["seat"], char_limits),
+                                   role_name(roles.get(seat["seat"], "")),
+                                   out["tools_used"])
     out["report"] = reports[-1] if reports else ""
     out["format_errors"] += errs
     out["format_warnings"] += warns
-    out.update(stance=res["stance"], scores=res["scores"], chars=res["chars"])
+    out.update(stance=res["stance"], scores=res["scores"], chars=res["chars"],
+               must_answer_count=res["must_answer_count"])
 
     unknown_rcpt = any("無法判斷收件對象" in i for i in out["isolation"])
     hard_violation = any("無法判斷收件對象" not in i for i in out["isolation"])
-    if residual and not seat.get("retry"):
+    if out["retried"]:
+        if retry is None or not retry["valid"]:
+            out["dispatch"].append("seats.json 的 retry 格式不合法（hint_ids 必須是字串清單）")
+        else:
+            out["dispatch"] += check_retry_residual(residual, retry["hint_ids"], menu)
+    elif residual:
         out["dispatch"].append("首次派發的任務含有簡報、角色卡、規格以外的文字")
     if out["dispatch"]:
         out["verdict"] = "派發錯誤"
@@ -304,10 +443,10 @@ def audit_seat(seat, parent_id, brief, roles, schema):
 
 def absent_row(seat_no, reason):
     """seats.json 中沒有登錄的席位，仍必須以缺席列出，不能從報表中消失。"""
-    return {"seat": seat_no, "conversation_id": None, "verdict": "缺席",
-            "isolation": [], "dispatch": [reason], "residual": None,
-            "format_errors": [], "format_warnings": [], "tools_used": [],
-            "stance": None, "scores": {}, "chars": 0, "report": ""}
+    row = new_row(seat_no, None)
+    row["verdict"] = "缺席"
+    row["dispatch"] = [reason]
+    return row
 
 
 def validate_seats_config(cfg):
@@ -317,8 +456,11 @@ def validate_seats_config(cfg):
     """
     errors, rows, seen_seat, seen_conv, seen_tx = [], [], {}, {}, {}
     for raw in cfg.get("seats") or []:
+        if not isinstance(raw, dict):
+            errors.append(f"席位登錄項目不是物件：{raw!r}")
+            continue
         n = raw.get("seat")
-        if not isinstance(n, int) or not 1 <= n <= 6:
+        if not isinstance(n, int) or isinstance(n, bool) or not 1 <= n <= 6:
             errors.append(f"席位編號不合法：{n!r}（必須是 1–6 的整數）")
             continue
         if n in seen_seat:
@@ -330,8 +472,8 @@ def validate_seats_config(cfg):
             continue
         tx = raw.get("transcript")
         try:
-            key = str(to_path(tx).resolve()).lower() if tx else None
-        except OSError:
+            key = str(to_path(tx).resolve()).lower() if tx and isinstance(tx, str) else None
+        except (OSError, ValueError):
             key = str(tx).lower()
         if key and key in seen_tx:
             errors.append(f"席位 {n} 與席位 {seen_tx[key]} 指向同一份 transcript")
@@ -353,7 +495,8 @@ def aggregate(seats):
             continue
         seen.add(s["seat"])
         deduped.append(s)
-    valid = [s for s in deduped if s["verdict"] in ("通過", "未稽核") and len(s["scores"]) == 6]
+    valid = [s for s in deduped if s["verdict"] == "通過" and len(s["scores"]) == 6
+             and not s.get("excluded_by_role_check")]
     dist = {k: sum(1 for s in valid if s["stance"] == k) for k in STANCES}
     tears = []
     for dim in DIMENSIONS:
@@ -365,13 +508,16 @@ def aggregate(seats):
     return {"valid_seats": [s["seat"] for s in valid], "stance_distribution": dist, "tears": tears}
 
 
+def cell(text):
+    """表格儲存格內：| 跳脫成 \\|、換行改成空白。"""
+    return str(text).replace("|", "\\|").replace("\r\n", " ").replace("\n", " ").replace("\r", " ")
+
+
 def to_markdown(seats, agg, residual_note):
     lines = ["### 機械式稽核結果", "",
              "| 席位 | 判定 | 使用工具 | 字數 | 問題 |", "|---|---|---|---|---|"]
     for s in seats:
-        problems = s["dispatch"] + s["isolation"] + s["format_errors"] + s["format_warnings"]
-        if s["residual"]:
-            problems.append("任務含額外內容（見 audit.json）")
+        problems = [cell(p) for p in seat_problems(s)]
         lines.append(f"| {s['seat']} | {s['verdict']} | {', '.join(s['tools_used']) or '—'} | "
                      f"{s['chars'] or '—'} | {'；'.join(problems) or '—'} |")
     lines += ["", "### 六維評分總表", "",
@@ -394,38 +540,259 @@ def to_markdown(seats, agg, residual_note):
     return "\n".join(lines)
 
 
-# 數值擷取：先處理千分位與負號，避免 1,000,000 被拆成兩筆；
-# 中文數字（三週、十天）另行比對，否則會整個漏掉。
-_NUM = r"[-－−]?(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d+)?"
+# 數值擷取（A10）。流程：NFKC 正規化 -> 以等長空白蓋掉網址、日期、清單編號 -> 比對數值＋單位。
+# 負號只在前面不是英數或小數點時才算（3-5 天 是範圍，不是 -5）；Q1、R2、v2.5 這類編號不算數值。
+_NUM = (r"(?<![A-Za-z\d.,])(?P<neg>(?<![\w.])[-\u2212])?"
+        r"(?P<num>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)")
 _CN_NUM = r"[一二兩三四五六七八九十百千]+"
-_UNIT = (r"(?:%|％|GB|MB|TB|KB|ms|km|公尺|公里|小時|分鐘|分|秒|天|日|週|周|個月|月|年|次|席|條|"
-         r"美元|日圓|円|元|萬|億|人|名|組|顆|倍|吋|度)")
-VALUE_PAT = re.compile(rf"(?:NT\$|US\$|\$)?{_NUM}\s*{_UNIT}?|{_CN_NUM}\s*{_UNIT}")
+# 順序即優先序：長的在前（日圓 先於 日、個月 先於 個、分鐘 先於 分、萬元 先於 萬）
+_UNIT = (r"(?:%|GB|MB|TB|KB|kg|cm|mm|ms|km|公尺|公里|小時|分鐘|分|秒|天|日圓|日|週|周|個月|個|月|年|次|席|條|"
+         r"美元|円|萬元|億元|元|萬|億|人|名|組|顆|倍|吋|度|件|台|家|位|項|筆|張|份|套|輛|間|場|頁|行|字|[kK](?![A-Za-z]))")
+VALUE_PAT = re.compile(
+    rf"(?P<cur>NT\$|US\$|\$)?{_NUM}(?:[ \t]*(?P<unit>{_UNIT}))?"
+    rf"|(?P<cn>{_CN_NUM})[ \t]*(?P<cnunit>{_UNIT})")
+_NOISE_PATS = [
+    re.compile(r"https?://[^\s)）」』>\]]+"),                                   # 網址
+    re.compile(r"\d{4}\s*[-/.年]\s*\d{1,2}\s*[-/.月]\s*\d{1,2}\s*[日號]?"),     # 2026-10-19、2026/10/19、2026年10月19日
+    re.compile(r"\d{1,2}\s*月\s*\d{1,2}\s*[日號]"),                              # 10月19日
+    re.compile(r"(?m)^[ \t]*(?:[-*+][ \t]+)?\d+[.)、][ \t]+"),                   # 條列編號
+    re.compile(r"(?m)^#{1,6}[ \t]*\d+[.、)]"),                                   # 標題編號
+]
+_CN_SOFT = {"一"}                       # 「一次」「一個」是慣用語，只有時間單位才算數值
+_CN_SOFT_OK_UNITS = {"週", "周", "天", "個月", "月", "年", "小時", "分鐘", "秒"}
+_UNIT_ALIAS = {"周": "週", "円": "日圓", "K": "k"}
+
+
+def clean_for_numbers(text):
+    t = unicodedata.normalize("NFKC", text or "")
+    for pat in _NOISE_PATS:
+        t = pat.sub(lambda m: " " * len(m.group(0)), t)
+    return t
+
+
+def _ctx(t, a, b, width=15):
+    return re.sub(r"\s+", " ", t[max(0, a - width):b + width]).strip()
+
+
+def extract_numbers(text):
+    """回傳 [{"value": 原文, "key": (數值, 單位), "context": 前後約 15 字}]，依出現順序。"""
+    original = unicodedata.normalize("NFKC", text or "")
+    cleaned = clean_for_numbers(text)
+    out = []
+    for m in VALUE_PAT.finditer(cleaned):
+        raw = re.sub(r"\s+", " ", m.group(0).strip())
+        if m.group("cn"):
+            unit = m.group("cnunit")
+            if m.group("cn") in _CN_SOFT and unit not in _CN_SOFT_OK_UNITS:
+                continue
+            key = (m.group("cn"), _UNIT_ALIAS.get(unit, unit))
+        else:
+            unit = (m.group("cur") or "") + (m.group("unit") or "")
+            digits = m.group("num").replace(",", "")
+            if not m.group("unit") and not m.group("cur") and re.fullmatch(r"\d", digits):
+                continue          # 跳過條列編號之類的單一數字
+            try:
+                n = format(Decimal(digits).normalize(), "f")
+            except InvalidOperation:
+                continue
+            if m.group("neg"):
+                n = "-" + n
+            u = m.group("unit") or ""
+            key = (n, (m.group("cur") or "") + _UNIT_ALIAS.get(u, u))
+        out.append({"value": raw, "key": key, "context": _ctx(original, m.start(), m.end())})
+    return out
+
+
+def strip_score_line(report):
+    """六維評分那行是規格固定欄位（x/10），不是方案數值。"""
+    return "\n".join(l for l in norm(report or "").split("\n") if "【六維評分】" not in l)
+
+
+def eligible(s):
+    return s.get("verdict") == "通過" and not s.get("excluded_by_role_check")
 
 
 def collect_values(seats):
     """列出各席「稽核通過」報告中出現過的數值（含單位）。
 
-    供步驟 4 比對加固方案用。只收通過的席位——未稽核席位的報告沒有經過
-    隔離與格式驗證，它的數值不能充當加固方案的合法來源。
+    供步驟 4 比對加固方案用。只收通過且未被 role_check 排除的席位——
+    未稽核席位的報告沒有經過隔離與格式驗證，它的數值不能充當加固方案的合法來源。
     不改變任何稽核判定，只是把人工比對的工作變成可機械核對的清單。
     """
     out = {}
     for s in seats:
-        if s["verdict"] != "通過":
+        if not eligible(s):
             continue
-        # 六維評分那行是規格固定欄位（x/10），不是方案數值，先剔除
-        lines_ = norm(s.get("report", "") or "").split(chr(10))
-        body = chr(10).join(l for l in lines_ if "【六維評分】" not in l)
         vals = []
-        for m in VALUE_PAT.finditer(body):
-            v = re.sub(r"\s+", " ", m.group(0).strip())
-            if re.fullmatch(r"\d", v):
-                continue          # 跳過條列編號之類的單一數字
-            if v not in vals:
-                vals.append(v)
+        for n in extract_numbers(strip_score_line(s.get("report", ""))):
+            if n["value"] not in vals:
+                vals.append(n["value"])
         out[s["seat"]] = vals
     return out
+
+
+def check_plan_numbers(plan_text, brief_text, seats):
+    """回傳 (unsourced, sourced)。每筆 {"value","context"}；sourced 另附 "source"。
+
+    來源 = brief.md + 通過且未排除席位的報告。比對以（正規化數值, 單位）為準。
+    """
+    index = {}
+    for n in extract_numbers(brief_text):
+        index.setdefault(n["key"], ("brief.md", n["context"]))
+    for s in seats:
+        if eligible(s):
+            for n in extract_numbers(strip_score_line(s.get("report", ""))):
+                index.setdefault(n["key"], (f"席位 {s['seat']}", n["context"]))
+    unsourced, sourced, seen = [], [], set()
+    for n in extract_numbers(plan_text):
+        if n["key"] in seen:
+            continue
+        seen.add(n["key"])
+        if n["key"] in index:
+            sourced.append({"value": n["value"], "context": n["context"], "source": index[n["key"]][0]})
+        else:
+            unsourced.append({"value": n["value"], "context": n["context"]})
+    return unsourced, sourced
+
+
+def plan_markdown(unsourced, sourced):
+    lines = ["### 方案數字來源核對（--check-plan）", ""]
+    if unsourced:
+        lines += [f"**{len(unsourced)} 個數字在簡報與通過席位報告中找不到來源**，必須改寫成待確認的驗證步驟後重跑：", ""]
+        lines += [f"- `{u['value']}`：…{cell(u['context'])}…" for u in unsourced]
+    else:
+        lines.append("所有數字都找得到來源。")
+    if sourced:
+        lines += ["", "有來源的數字：", ""]
+        lines += [f"- `{u['value']}`（{u['source']}）：…{cell(u['context'])}…" for u in sourced]
+    return "\n".join(lines)
+
+
+def run_check_plan(run):
+    audit_p, plan_p, brief_p = run / "audit.json", run / "plan.md", run / "brief.md"
+    for p, hint in ((plan_p, "步驟 4 寫完方案後要先存成 plan.md"),
+                    (audit_p, "請先不帶 --check-plan 跑一次稽核"),
+                    (brief_p, "")):
+        if not p.is_file():
+            print(f"錯誤：找不到 {p}。{hint}", file=sys.stderr)
+            return 2
+    audit = json.loads(audit_p.read_text(encoding="utf-8"))
+    unsourced, sourced = check_plan_numbers(plan_p.read_text(encoding="utf-8"),
+                                            brief_p.read_text(encoding="utf-8"), audit.get("seats", []))
+    audit["unsourced_numbers"] = unsourced
+    audit_p.write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(plan_markdown(unsourced, sourced))
+    return 1 if unsourced else 0
+
+
+# ---------- Mode B 輸出（A15）----------
+def seat_problems(s):
+    problems = s["dispatch"] + s["isolation"] + s["format_errors"] + s["format_warnings"]
+    if s["residual"]:
+        problems.append("任務含額外內容（見 audit.json）")
+    if s.get("excluded_by_role_check"):
+        problems.append("離題（role_check），不計票")
+    return problems
+
+
+def _seat_label(s, roles):
+    name = role_name((roles or {}).get(s["seat"], ""))
+    return f"席位 {s['seat']}" + (f"（{name}）" if name else "")
+
+
+def build_summary(seats, roles, table_md):
+    """每席一段，直接擷取報告原句（立場、最強支持理由、致命盲點的「場景」），不改寫。"""
+    lines = ["# 決策審查會摘要", ""]
+    for s in seats:
+        counted = eligible(s)
+        status = s["verdict"] + ("" if counted else "（不計票）")
+        if s.get("excluded_by_role_check"):
+            status = f"{s['verdict']}；離題排除（不計票）"
+        lines += [f"## {_seat_label(s, roles)}：{status}", ""]
+        if not counted:
+            reasons = seat_problems(s)
+            lines.append("- 狀態：" + ("；".join(cell(x) for x in reasons) if reasons else "無可用報告"))
+            lines.append("")
+            continue
+        f = split_fields(norm(s.get("report", "")))
+        lines.append(f"- 立場：{s['stance'] or '—'}")
+        lines.append(f"- 最強支持理由：{_head(f.get('【最強支持理由】', '')).strip() or '—'}")
+        scenes = re.findall(r"場景\s*[:：]\s*(.+)", f.get("【致命盲點】", ""))
+        for n, sc in enumerate(scenes, 1):
+            lines.append(f"- 致命盲點 {n} 場景：{sc.strip()}")
+        if not scenes:
+            lines.append("- 致命盲點場景：—")
+        lines.append("")
+    lines += ["## 稽核表", "", table_md]
+    return "\n".join(lines) + "\n"
+
+
+def build_report_full(seats, roles, table_md):
+    """六席完整報告原文（逐字，不改寫）與完整稽核表。"""
+    lines = ["# 決策審查會完整報告", ""]
+    for s in seats:
+        lines += [f"## {_seat_label(s, roles)}：{s['verdict']}", ""]
+        if s.get("excluded_by_role_check"):
+            lines += ["（此席已被 role_check 判定離題，不計票）", ""]
+        lines += [s.get("report") or "（無報告）", "", "---", ""]
+    lines += ["## 完整稽核表", "", table_md]
+    return "\n".join(lines) + "\n"
+
+
+# ---------- 錨定清單（A12，D7）----------
+# 詞的定義（確定性，只用標準函式庫）：
+#   CJK 詞 = 簡報中某段「連續 CJK 字元」（標點、空白、換行都會切斷）的子字串，長度 4–12；
+#   英數詞 = 簡報中的英數單字（[A-Za-z0-9]+，須含字母，轉小寫），長度 >= 3。
+#   席位「使用」某詞 = 該詞也出現在該席報告（CJK 為同樣的連續子字串、英數為同一單字）。
+#   排除：整個詞是任一角色卡或輸出規格的子字串（固定用詞，如六維名稱、欄位標記）；
+#         英數詞出現在角色卡／規格中者亦排除。
+#   只計 通過且未被 role_check 排除 的席位，>= ANCHOR_MIN_SEATS 席使用才列入。
+#   去重：同一組席位下，被較長詞完全包含的短詞移除。
+#   排序：席位數多者在前，其次詞長，其次字典序；最多 ANCHOR_MAX_TERMS 筆。
+_CJK_RUN = re.compile(r"[\u4e00-\u9fff]{%d,}" % ANCHOR_CJK_MIN)
+_WORD_RE = re.compile(r"[A-Za-z0-9]{%d,}" % ANCHOR_WORD_MIN)
+
+
+def _cjk_grams(text):
+    out = set()
+    for run in _CJK_RUN.findall(text):
+        for n in range(ANCHOR_CJK_MIN, min(ANCHOR_CJK_MAX, len(run)) + 1):
+            for k in range(len(run) - n + 1):
+                out.add(run[k:k + n])
+    return out
+
+
+def _words(text):
+    return {w.lower() for w in _WORD_RE.findall(text) if re.search(r"[A-Za-z]", w)}
+
+
+def compute_anchoring(brief, seats, fixed_text=""):
+    fixed_text = unicodedata.normalize("NFKC", fixed_text or "")
+    fixed_words = _words(fixed_text)
+    b = unicodedata.normalize("NFKC", brief or "")
+    brief_cjk = {t for t in _cjk_grams(b) if t not in fixed_text}
+    brief_words = _words(b) - fixed_words
+    users = {}
+    for s in seats:
+        if not eligible(s):
+            continue
+        body = unicodedata.normalize("NFKC", s.get("report", "") or "")
+        for t in (_cjk_grams(body) & brief_cjk) | (_words(body) & brief_words):
+            users.setdefault(t, []).append(s["seat"])
+    cand = {t: tuple(sorted(set(v))) for t, v in users.items() if len(set(v)) >= ANCHOR_MIN_SEATS}
+    kept = {t: sv for t, sv in cand.items()
+            if not any(len(o) > len(t) and sv == osv and t in o for o, osv in cand.items())}
+    ordered = sorted(kept.items(), key=lambda kv: (-len(kv[1]), -len(kv[0]), kv[0]))
+    return [{"term": t, "seats": list(sv)} for t, sv in ordered[:ANCHOR_MAX_TERMS]]
+
+
+def anchoring_markdown(terms):
+    if not terms:
+        return ""
+    lines = ["", f"### 錨定詞（簡報用詞被 {ANCHOR_MIN_SEATS} 席以上沿用）", "",
+             "| 詞 | 席位 |", "|---|---|"]
+    lines += [f"| {cell(t['term'])} | {'、'.join(map(str, t['seats']))} |" for t in terms]
+    return "\n".join(lines)
 
 
 def values_markdown(values):
@@ -450,8 +817,20 @@ def main():
                     help="有任何席位未通過或缺席時回傳非 0；預設維持 0（代表稽核程式本身執行完成）")
     ap.add_argument("--list-values", action="store_true",
                     help="另外輸出各席報告中出現過的數值清單（步驟 4 比對加固方案用）")
+    ap.add_argument("--check-plan", action="store_true",
+                    help="不重新稽核；讀既有 audit.json 與 plan.md，核對 plan 的數字是否有來源（有 unsourced 時結束碼非 0）")
+    ap.add_argument("--brain-dir", action="append", default=None,
+                    help="agy brain 資料夾（可重複）；預設 ~/.gemini/antigravity/brain 與 ~/.gemini/antigravity-cli/brain")
+    ap.add_argument("--char-limit", type=int, default=None, metavar="N",
+                    help="覆寫一般席位的字數上限（預設 %d）；席位 5 依 1500/1200 比例放寬。超過只記警告" % CHAR_LIMIT_DEFAULT)
+    ap.add_argument("--char-limit-seat5", type=int, default=None, metavar="M",
+                    help="直接指定席位 5 的字數上限（優先於 --char-limit 的比例放寬）")
     a = ap.parse_args()
+    char_limits = build_char_limits(a.char_limit, a.char_limit_seat5)
+    brain_dirs = [os.path.expanduser(d) for d in (a.brain_dir or DEFAULT_BRAIN_DIRS)]
     skill, run = Path(a.skill_dir), Path(a.run_dir)
+    if a.check_plan:
+        sys.exit(run_check_plan(run))
 
     brief = norm((run / "brief.md").read_text(encoding="utf-8"))
     schema = norm((skill / "schemas" / "subagent_output.md").read_text(encoding="utf-8"))
@@ -463,7 +842,17 @@ def main():
 
     cfg = json.loads((run / "seats.json").read_text(encoding="utf-8"))
     rows, missing, cfg_errors = validate_seats_config(cfg)
-    seats = [audit_seat(s, cfg["parent_id"], brief, roles, schema) for s in rows]
+    menu = load_menu(skill)
+    seats = []
+    for s in rows:
+        try:
+            seats.append(audit_seat(s, cfg.get("parent_id"), brief, roles, schema, menu, cfg_errors,
+                                    brain_dirs, char_limits))
+        except Exception as e:      # 單席問題只影響該席，不讓整批稽核中斷
+            row = new_row(s.get("seat"), s.get("conversation_id"), s.get("retry") not in (None, False))
+            row["verdict"] = "未稽核"
+            row["isolation"].append(f"稽核該席時發生例外：{e!r}")
+            seats.append(row)
     for n in missing:
         seats.append(absent_row(n, "seats.json 中沒有這一席的執行紀錄"))
     seats.sort(key=lambda x: x["seat"])
@@ -478,16 +867,26 @@ def main():
 
     residual_note = None
     if any(s["residual"] for s in seats):
-        residual_note = "任務中的額外文字（重派席位僅允許一行程序性修正提示，請人工確認未暗示立場）：\n" + "\n".join(
-            f"- 席位 {s['seat']}{'（重派）' if any(c.get('seat') == s['seat'] and c.get('retry') for c in cfg['seats']) else ''}：{s['residual'][:150]}{'…（完整內容見 audit.json）' if len(s['residual']) > 150 else ''}"
+        residual_note = "任務中的額外文字（重派席位已由程式比對 retry_menu.md 條目，不符者判派發錯誤，無須人工逐字確認）：\n" + "\n".join(
+            f"- 席位 {s['seat']}{'（重派）' if s['retried'] else ''}：{s['residual'][:150]}{'…（完整內容見 audit.json）' if len(s['residual']) > 150 else ''}"
             for s in seats if s["residual"])
 
-    payload = {"seats": seats, "aggregate": agg, "config_errors": cfg_errors}
+    # 簡報範本的段落標題（例如「剛性限制」「風險底線」）每份簡報都有，不算錨定
+    try:
+        brief_tpl = norm((skill / "templates" / "baseline_brief.md").read_text(encoding="utf-8"))
+    except OSError:
+        brief_tpl = ""
+    fixed_text = "\n".join(list(roles.values()) + [schema, brief_tpl])
+    payload = {"seats": seats, "aggregate": agg, "config_errors": cfg_errors,
+               "anchoring_terms": compute_anchoring(brief, seats, fixed_text), "unsourced_numbers": []}
     if a.list_values:
         payload["reported_values"] = collect_values(seats)
     (run / "audit.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(to_markdown(seats, agg, residual_note))
+    table_md = to_markdown(seats, agg, residual_note) + anchoring_markdown(payload["anchoring_terms"])
+    (run / "summary.md").write_text(build_summary(seats, roles, table_md), encoding="utf-8")
+    (run / "report_full.md").write_text(build_report_full(seats, roles, table_md), encoding="utf-8")
+    print(table_md)
     if a.list_values:
         print("\n" + values_markdown(payload["reported_values"]))
     if a.strict:

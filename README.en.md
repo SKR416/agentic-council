@@ -351,6 +351,7 @@ Tips:
 - You can freely state your leaning in your proposal, and the main agent will strip it. But state facts and constraints clearly: the brief includes only what you explicitly provide, and the main agent may not add background knowledge on its own.
 - Revising the plan midway counts as a new review round: the brief is frozen again and all 6 seats are re-dispatched.
 - Seat reports connect to web search, so expect the review to take some time.
+- The skill does not pin a model: all 6 reviewers use whatever model agy is currently configured with, usually the same one. Their independence comes from isolated contexts and fixed role cards, not from model diversity.
 
 ---
 

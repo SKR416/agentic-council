@@ -1,5 +1,7 @@
 # agentic-council
 
+[English](README.en.md) | **繁體中文**
+
 給 [Antigravity](https://antigravity.google/)（agy）使用的**決策智囊團 skill**，採用 Orchestrator-Subagent 架構。
 
 主 Agent 負責檢驗方案邊界、凍結中立簡報、仲裁衝突並做最後收斂。6 個法定席位以彼此隔離的唯讀子代理平行審查，各自從固定視角施加壓力測試。子代理的工具呼叫逐筆稽核，輸出採固定結構與六維評分；未產出合格報告的席位標示為缺席，主 Agent 不得代寫。
@@ -407,6 +409,8 @@ SKILL.md 與各模板檔「每次都逐字相同」是設計的核心：任何�
 ---
 
 ## 更新紀錄
+
+> 改版時請同步更新英文版 [README.en.md](README.en.md)。
 
 ### v2.5.0
 

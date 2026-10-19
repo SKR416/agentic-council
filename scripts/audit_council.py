@@ -35,10 +35,14 @@ STANCES = ["支持推進", "有條件推進", "要求推倒重構", "強烈否�
 DIMENSIONS = ["生存安全", "上限潛力", "執行可行性", "長期穩定", "假設穩健度", "人因可持續性"]
 REQUIRED_FIELDS = ["【席位】", "【立場裁定】", "【信心程度】", "【六維評分】",
                    "【最強支持理由】", "【致命盲點】", "【防禦性底線】"]
-CHAR_LIMIT_DEFAULT = 900
+# 字數建議上限（D2）：超過只記警告。A14 會加上 --char-limit 覆寫。
+CHAR_LIMIT_DEFAULT = 1200
 # 席位 5（逆向破局者）的職責比其他席位多一整段「完全相反的做法＋其最強論證」，
 # 用同一個上限會系統性地把這一席判出局，因此單獨放寬。
-CHAR_LIMIT_BY_SEAT = {5: 1200}
+CHAR_LIMIT_BY_SEAT = {5: 1500}
+MUST_ANSWER_MIN = 2      # 【必答回應】至少要答的題數（D6）
+ANCHOR_MIN_SEATS = 2     # 幾位評審用到同一個題目用詞，就列入錨定清單（D7）
+RETRY_HINT_MAX = 2       # 重派任務最多附幾條 retry_menu.md 條目（D5）
 
 
 def char_limit(seat_no):

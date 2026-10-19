@@ -871,7 +871,12 @@ def main():
             f"- 席位 {s['seat']}{'（重派）' if s['retried'] else ''}：{s['residual'][:150]}{'…（完整內容見 audit.json）' if len(s['residual']) > 150 else ''}"
             for s in seats if s["residual"])
 
-    fixed_text = "\n".join(list(roles.values()) + [schema])
+    # 簡報範本的段落標題（例如「剛性限制」「風險底線」）每份簡報都有，不算錨定
+    try:
+        brief_tpl = norm((skill / "templates" / "baseline_brief.md").read_text(encoding="utf-8"))
+    except OSError:
+        brief_tpl = ""
+    fixed_text = "\n".join(list(roles.values()) + [schema, brief_tpl])
     payload = {"seats": seats, "aggregate": agg, "config_errors": cfg_errors,
                "anchoring_terms": compute_anchoring(brief, seats, fixed_text), "unsourced_numbers": []}
     if a.list_values:

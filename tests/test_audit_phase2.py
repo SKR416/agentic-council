@@ -411,3 +411,14 @@ def test_summary_marks_role_check_exclusion(new_run):
     run_audit(run)
     summ = (run["run_dir"] / "summary.md").read_text(encoding="utf-8")
     assert "離題排除（不計票）" in summ
+
+
+def test_anchoring_ignores_brief_template_headings(new_run):
+    """簡報範本的段落標題（剛性限制）每份簡報都有，不列入錨定；使用者用詞照列。"""
+    from conftest import report
+    brief = "# Baseline Brief\n\n## 剛性限制\n每月通勤花費要降低\n"
+    opts = {n: {"report": report(n, extra="，剛性限制下每月通勤花費要降低")} for n in (1, 2)}
+    _, audit = run_audit(new_run(brief=brief, seat_opts=opts))
+    terms = [t["term"] for t in audit["anchoring_terms"]]
+    assert "剛性限制" not in terms
+    assert any("通勤花費" in t for t in terms)

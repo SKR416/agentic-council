@@ -9,6 +9,7 @@
 | `audit.json` | 稽核腳本 | 主 Agent、儀表板腳本 |
 | `summary.md` | 稽核腳本 | 主 Agent（Mode B 對話輸出） |
 | `report_full.md` | 稽核腳本 | 使用者（完整報告） |
+| `plan.md` | 主 Agent（步驟 4） | 稽核腳本 `--check-plan` |
 | `dashboard_input.json` | 主 Agent | 儀表板腳本 |
 | `plan_preview.html` | 儀表板腳本 | 使用者 |
 
@@ -99,7 +100,14 @@
 - `must_answer_count`：Phase 1 先填 `null`，A13 完成後填實數。
 - 只有 `verdict == "通過"` 且 `excluded_by_role_check == false` 的席位進入 `aggregate`（A8）。
 - `anchoring_terms`（A12）：2 位以上（`ANCHOR_MIN_SEATS`）通過席位使用、且已出現在 `brief.md` 的詞。Phase 1 先輸出空陣列。
-- `unsourced_numbers`（A10）：方案中出現、但在題目與通過席位報告中都找不到的數字。Phase 1 先輸出空陣列。
+- `unsourced_numbers`（A10）：`plan.md` 中出現、但在 `brief.md` 與通過席位（且未被 role_check 排除）報告中都找不到的數字，每筆附 `context`（前後文）。Phase 1 先輸出空陣列。
+
+## plan.md 與 --check-plan（A10）
+
+- 步驟 4 寫完「硬化後的主方案」後，主 Agent 把方案全文（含標題、表格）存成 `plan.md`，再執行：
+  `python audit_council.py --skill-dir <skill> --run-dir <run> --check-plan`
+- `--check-plan` 讀取既有的 `audit.json`（不重新稽核席位），比對 `plan.md` 的數字，把結果寫回 `audit.json` 的 `unsourced_numbers` 並輸出 Markdown 清單。
+- 有任何 `unsourced_numbers` 時結束碼非 0。主 Agent 必須把那些數字改寫成待確認的驗證步驟後重跑，直到清單為空（D1，不開例外）。
 
 ## summary.md 與 report_full.md（A15）
 

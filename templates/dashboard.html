@@ -1,4 +1,4 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="zh-Hant">
 <head>
 <meta charset="utf-8">
@@ -440,6 +440,7 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
         "retried": false,
         "excluded_by_role_check": true,
         "role_check_reason": "報告內容偏離本席職責，未回應必答問題",
+        "role_check_quote": "這個方案最可能在幾個月或幾年後引發什麼二階效應？",
         "warnings": [],
         "isolation": [],
         "dispatch": [],
@@ -1087,7 +1088,8 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
       el('div', { 'class': 'block' }, el('h3', null, '離題排除席位（不計入圖表，原始報告仍保留）'),
         names(off, function (s) {
           var w = s.entry && typeof s.entry.role_check_reason === 'string' ? s.entry.role_check_reason : '';
-          return '席位 ' + s.n + ' ' + s.zh + (w ? '：' + w : '');
+          var q = s.entry && typeof s.entry.role_check_quote === 'string' ? s.entry.role_check_quote : '';
+          return '席位 ' + s.n + ' ' + s.zh + (w ? '：' + w : '') + (q ? '（引用角色卡條款：「' + q + '」）' : '');
         }))
     ]);
   }
@@ -1126,6 +1128,9 @@ footer { margin-block-start: 64px; padding-block-start: 16px; border-top: 1px so
       var body = el('div', { 'class': 'body' });
       if (!s.valid) {
         body.appendChild(el('p', { 'class': 'absent-line' }, el('strong', null, '【' + s.label + '】'), '原因：' + s.reason));
+        if (s.excluded && e.role_check_quote) {
+          body.appendChild(el('p', { 'class': 'absent-line' }, el('strong', null, '【引用角色卡條款】'), '「' + str(e.role_check_quote) + '」（請與下方原始報告並列核對）'));
+        }
       }
       if (s.valid || ((s.excluded || s.unaudited) && e.report)) {
         body.appendChild(el('div', { 'class': 'report-text' }, str(e.report, '（沒有報告全文）')));

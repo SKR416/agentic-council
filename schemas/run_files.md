@@ -4,6 +4,7 @@
 
 | 檔案 | 寫入者 | 讀取者 |
 |---|---|---|
+| `../config.json` | `init_council.py`（步驟 -1） | 主 Agent、稽核腳本 |
 | `brief.md` | 主 Agent（步驟 1） | 稽核腳本 |
 | `seats.json` | 主 Agent（步驟 2、2.5） | 稽核腳本 |
 | `audit.json` | 稽核腳本 | 主 Agent、儀表板腳本 |
@@ -13,13 +14,31 @@
 | `dashboard_input.json` | 主 Agent | 儀表板腳本 |
 | `plan_preview.html` | 儀表板腳本 | 使用者 |
 
+## .council/config.json（環境與模型編制設定）
+
+由 `scripts/init_council.py` 於步驟 -1 建立與驗證，存放於 `<工作區>/.council/config.json`：
+
+```json
+{
+  "version": 1,
+  "platform": "agy",
+  "brain_dirs": ["C:/Users/a1083/.gemini/antigravity-cli/brain", "C:/Users/a1083/.gemini/antigravity/brain"],
+  "model_preset": "M1 | M2 | M3 | M4 | M5",
+  "seat_models": {"1": "pro", "2": "pro", "3": "pro", "4": "pro", "5": "pro", "6": "pro"}
+}
+```
+
+- `platform`：對應 `scripts/transcripts/<platform>.py` 的 transcript adapter（預設 `agy`）。
+- `brain_dirs`：稽核腳本未傳 `--brain-dir` 時，自動採用此處的路徑清單。
+- `model_preset` 與 `seat_models`：對應 `templates/init_menu.md`（`M1`=`inherit`、`M2`=`pro`、`M3`=`flash`、`M4`=`flash_lite`、`M5`=自訂）。對立席位組（1 vs 2、3 vs 4、5 vs 6）必須維持算力等級對稱，否則由 `init_council.py` 與 `audit_council.py` 判為設定錯誤。
+
 ## seats.json
 
 ```json
 {
   "parent_id": "<主 Agent 自身的對話 ID>",
   "seats": [
-    {"seat": 1, "conversation_id": "<子代理 ID>", "transcript": "<transcript_full.jsonl 路徑>"},
+    {"seat": 1, "conversation_id": "<子代理 ID>", "transcript": "<transcript_full.jsonl 路徑>", "model": "pro"},
     {"seat": 3, "conversation_id": "<重派的子代理 ID>", "transcript": "...",
      "retry": {"count": 1, "hint_ids": ["R2"], "previous_transcript": "<前一次的 transcript 路徑>"}},
     {"seat": 5, "conversation_id": "...", "transcript": "...",
@@ -54,6 +73,7 @@
 ```
 ^- (R\d+)\s+(.+)$      # retry_menu.md：編號、條目全文
 ^- (P\d+)\s+(.+)$      # preset_menu.md
+^- (M\d+)\s+(.+)$      # init_menu.md：環境與模型編制選項
 ```
 
 條目全文必須是單行完整句子，不得含換行。
@@ -76,9 +96,11 @@
     {
       "seat": 1,
       "conversation_id": "...",
+      "model": "pro",
       "verdict": "通過 | 派發錯誤 | 隔離違規 | 格式不合格 | 未稽核 | 缺席",
       "excluded_by_role_check": false,
       "role_check_reason": null,
+      "role_check_quote": null,
       "retried": false,
       "must_answer_count": 3,
       "warnings": ["..."],

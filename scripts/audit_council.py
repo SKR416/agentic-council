@@ -34,8 +34,10 @@ from pathlib import Path
 from urllib.parse import unquote, urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from transcripts import agy as tx_adapter  # noqa: E402
+
+from transcripts import agy as tx_adapter, get_adapter  # noqa: E402
 from transcripts.agy import TranscriptFormatError  # noqa: E402
+import init_council  # noqa: E402
 
 # 供外部（含測試）沿用舊名稱
 load_transcript = tx_adapter.load
@@ -101,10 +103,14 @@ def to_path(ref):
     return Path(ref)
 
 
+MENU_FILES = {"R": "retry_menu.md", "P": "preset_menu.md", "M": "init_menu.md"}
+
+
 def load_menu(skill_dir, prefix="R"):
-    """解析 templates/retry_menu.md 的條目：{編號: 條目全文}。讀不到回傳空表。"""
+    """解析 templates/ 下對應選單（R=retry_menu.md, P=preset_menu.md, M=init_menu.md）的條目：{編號: 條目全文}。"""
+    fname = MENU_FILES.get(prefix, "retry_menu.md")
     try:
-        text = (Path(skill_dir) / "templates" / "retry_menu.md").read_text(encoding="utf-8")
+        text = (Path(skill_dir) / "templates" / fname).read_text(encoding="utf-8")
     except Exception:
         return {}
     out = {}
@@ -321,9 +327,11 @@ def validate_report(report, limit, expected_role=None, tools_used=None):
     return errors, warnings, result
 
 
-def new_row(seat_no, conv, retried=False):
-    return {"seat": seat_no, "conversation_id": conv,
-            "verdict": None, "excluded_by_role_check": False, "role_check_reason": None, "retried": retried,
+def new_row(seat_no, conv, retried=False, model=None):
+    return {"seat": seat_no, "conversation_id": conv, "model": model,
+
+            "verdict": None, "excluded_by_role_check": False, "role_check_reason": None,
+            "role_check_quote": None, "retried": retried,
             "must_answer_count": None, "warnings": [],
             "isolation": [], "dispatch": [], "residual": None,
             "format_errors": [], "format_warnings": [], "tools_used": [],
@@ -356,17 +364,19 @@ def check_transcript_path(path, conv, brain_dirs):
 
 
 def audit_seat(seat, parent_id, brief, roles, schema, menu=None, config_errors=None,
-               brain_dirs=None, char_limits=None):
+               brain_dirs=None, char_limits=None, expected_model=None, adapter=None):
     menu = menu or {}
     brain_dirs = list(brain_dirs) if brain_dirs is not None else [os.path.expanduser(d) for d in DEFAULT_BRAIN_DIRS]
     config_errors = config_errors if config_errors is not None else []
     retry = retry_info(seat)
-    out = new_row(seat["seat"], seat.get("conversation_id"), seat.get("retry") not in (None, False))
+    seat_model = seat.get("model") or expected_model
+    out = new_row(seat["seat"], seat.get("conversation_id"), seat.get("retry") not in (None, False), model=seat_model)
     out["warnings"] = out["format_warnings"]      # 同一個清單，之後的警告自動同步
     try:
         out["excluded_by_role_check"], err = check_role_check(seat, roles.get(seat["seat"], ""))
         if out["excluded_by_role_check"]:
             out["role_check_reason"] = str(seat["role_check"].get("reason") or "")
+            out["role_check_quote"] = norm(str(seat["role_check"].get("quote") or ""))
         if err:
             config_errors.append(err)
     except Exception as e:
@@ -378,7 +388,7 @@ def audit_seat(seat, parent_id, brief, roles, schema, menu=None, config_errors=N
             out["verdict"] = "未稽核"
             out["isolation"].append(perr)
             return out
-        entries = tx_adapter.load(path)
+        entries = (adapter or tx_adapter).load(path)
     except TranscriptFormatError as e:
         out["verdict"] = "未稽核"
         out["isolation"].append(str(e))
@@ -388,11 +398,15 @@ def audit_seat(seat, parent_id, brief, roles, schema, menu=None, config_errors=N
         out["isolation"].append(f"無法讀取 transcript：{e!r}")
         return out
 
-    issues, residual = check_prompt(extract_prompt(entries), brief, roles[seat["seat"]], schema)
+    ep_fn = adapter.extract_prompt if adapter else extract_prompt
+    tc_fn = adapter.extract_tool_calls if adapter else extract_tool_calls
+    issues, residual = check_prompt(ep_fn(entries), brief, roles[seat["seat"]], schema)
+    if expected_model and seat.get("model") and str(seat.get("model")).strip() != str(expected_model).strip():
+        issues.append(f"seats.json 登錄的模型（{seat['model']}）與 config.json 設定（{expected_model}）不符")
     out["dispatch"], out["residual"] = issues, residual
 
     reports = []
-    for c in extract_tool_calls(entries):
+    for c in tc_fn(entries):
         out["tools_used"].append(c["name"])
         if c["name"] in ALLOWED_TOOLS:
             continue
@@ -441,9 +455,9 @@ def audit_seat(seat, parent_id, brief, roles, schema, menu=None, config_errors=N
     return out
 
 
-def absent_row(seat_no, reason):
+def absent_row(seat_no, reason, model=None):
     """seats.json 中沒有登錄的席位，仍必須以缺席列出，不能從報表中消失。"""
-    row = new_row(seat_no, None)
+    row = new_row(seat_no, None, model=model)
     row["verdict"] = "缺席"
     row["dispatch"] = [reason]
     return row
@@ -544,9 +558,9 @@ def to_markdown(seats, agg, residual_note):
 # 負號只在前面不是英數或小數點時才算（3-5 天 是範圍，不是 -5）；Q1、R2、v2.5 這類編號不算數值。
 _NUM = (r"(?<![A-Za-z\d.,])(?P<neg>(?<![\w.])[-\u2212])?"
         r"(?P<num>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)")
-_CN_NUM = r"[一二兩三四五六七八九十百千]+"
+_CN_NUM = r"[零〇一二兩三四五六七八九十百千]+"
 # 順序即優先序：長的在前（日圓 先於 日、個月 先於 個、分鐘 先於 分、萬元 先於 萬）
-_UNIT = (r"(?:%|GB|MB|TB|KB|kg|cm|mm|ms|km|公尺|公里|小時|分鐘|分|秒|天|日圓|日|週|周|個月|個|月|年|次|席|條|"
+_UNIT = (r"(?:%|GB|MB|TB|KB|kg|cm|mm|ms|km|公尺|公里|個小時|小時|分鐘|分|秒|天|日圓|日|個星期|個禮拜|星期|禮拜|週|周|個月|個人|個|月|年|次|席|條|"
          r"美元|円|萬元|億元|元|萬|億|人|名|組|顆|倍|吋|度|件|台|家|位|項|筆|張|份|套|輛|間|場|頁|行|字|[kK](?![A-Za-z]))")
 VALUE_PAT = re.compile(
     rf"(?P<cur>NT\$|US\$|\$)?{_NUM}(?:[ \t]*(?P<unit>{_UNIT}))?"
@@ -560,7 +574,36 @@ _NOISE_PATS = [
 ]
 _CN_SOFT = {"一"}                       # 「一次」「一個」是慣用語，只有時間單位才算數值
 _CN_SOFT_OK_UNITS = {"週", "周", "天", "個月", "月", "年", "小時", "分鐘", "秒"}
-_UNIT_ALIAS = {"周": "週", "円": "日圓", "K": "k"}
+_CN_SOFT_OK_UNITS = {"週", "周", "天", "日", "個月", "月", "年", "小時", "分鐘", "秒"}
+_CN_SOFT_OK_UNITS = {"週", "周", "星期", "禮拜", "個星期", "個禮拜", "天", "日", "個月", "月", "年", "個小時", "小時", "分鐘", "秒"}
+_UNIT_ALIAS = {
+    "周": "週", "星期": "週", "禮拜": "週", "個星期": "週", "個禮拜": "週",
+    "日": "天", "円": "日圓", "K": "k", "萬元": "萬", "億元": "億",
+    "名": "人", "位": "人", "個人": "人", "個小時": "小時",
+}
+_CN_DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4,
+              "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
+_CN_MULTS = {"十": 10, "百": 100, "千": 1000}
+
+
+def cn_to_arabic(s):
+    """將中文數字（如『三』『兩』『十二』『三十五』『三百五十』）轉為阿拉伯數字字串；無法解析時回原字串。"""
+    if not s:
+        return s
+    if all(c in _CN_DIGITS for c in s):
+        if len(s) == 1:
+            return str(_CN_DIGITS[s])
+        return str(int("".join(str(_CN_DIGITS[c]) for c in s)))
+    total, cur = 0, 0
+    for c in s:
+        if c in _CN_DIGITS:
+            cur = _CN_DIGITS[c]
+        elif c in _CN_MULTS:
+            total += (cur if cur else 1) * _CN_MULTS[c]
+            cur = 0
+        else:
+            return s
+    return str(total + cur)
 
 
 def clean_for_numbers(text):
@@ -585,7 +628,7 @@ def extract_numbers(text):
             unit = m.group("cnunit")
             if m.group("cn") in _CN_SOFT and unit not in _CN_SOFT_OK_UNITS:
                 continue
-            key = (m.group("cn"), _UNIT_ALIAS.get(unit, unit))
+            key = (cn_to_arabic(m.group("cn")), _UNIT_ALIAS.get(unit, unit))
         else:
             unit = (m.group("cur") or "") + (m.group("unit") or "")
             digits = m.group("num").replace(",", "")
@@ -697,12 +740,47 @@ def seat_problems(s):
 
 def _seat_label(s, roles):
     name = role_name((roles or {}).get(s["seat"], ""))
-    return f"席位 {s['seat']}" + (f"（{name}）" if name else "")
+    model_tag = f"［模型：{s['model']}］" if s.get("model") else ""
+    return f"席位 {s['seat']}" + (f"（{name}）" if name else "") + model_tag
 
 
-def build_summary(seats, roles, table_md):
+def summarize_stance_record(text):
+    """解析 stance_record.md，回傳 {'stripped_count': int, 'tendency_summary': str}。"""
+    t = norm(text or "")
+    if not t:
+        return {"stripped_count": 0, "tendency_summary": "未提供"}
+    stripped_sec, tend_sec = "", ""
+    m1 = re.search(r"^##\s*剝除的原句\s*$([\s\S]*?)(?=^##\s|\Z)", t, re.M)
+    if m1:
+        stripped_sec = m1.group(1).strip()
+    m2 = re.search(r"^##\s*使用者既有傾向摘要\s*$([\s\S]*?)(?=^##\s|\Z)", t, re.M)
+    if m2:
+        tend_sec = m2.group(1).strip()
+    lines = [
+        re.sub(r"^[-*+]\s*|\d+[.)、]\s*", "", l.strip()).strip()
+        for l in stripped_sec.split("\n")
+        if l.strip() and not l.strip().startswith(">") and not (l.strip().startswith("<") and l.strip().endswith(">"))
+    ]
+    lines = [l for l in lines if l and l not in ("無", "無。", "（無）")]
+    tend_lines = [
+        l.strip() for l in tend_sec.split("\n")
+        if l.strip() and not l.strip().startswith(">") and not (l.strip().startswith("<") and l.strip().endswith(">"))
+    ]
+    tendency = " ".join(tend_lines) if tend_lines else "未表達傾向"
+    return {"stripped_count": len(lines), "tendency_summary": tendency}
+
+
+def build_summary(seats, roles, table_md, stance_summary=None):
     """每席一段，直接擷取報告原句（立場、最強支持理由、致命盲點的「場景」），不改寫。"""
     lines = ["# 決策審查會摘要", ""]
+    if stance_summary:
+        lines += [
+            "## 立場剝除摘要",
+            "",
+            f"- 剝除原句條數：{stance_summary['stripped_count']} 條",
+            f"- 使用者既有傾向摘要：{stance_summary['tendency_summary']}",
+            "",
+        ]
     for s in seats:
         counted = eligible(s)
         status = s["verdict"] + ("" if counted else "（不計票）")
@@ -733,7 +811,9 @@ def build_report_full(seats, roles, table_md):
     for s in seats:
         lines += [f"## {_seat_label(s, roles)}：{s['verdict']}", ""]
         if s.get("excluded_by_role_check"):
-            lines += ["（此席已被 role_check 判定離題，不計票）", ""]
+            rc_reason = s.get("role_check_reason") or "未附理由"
+            rc_quote = s.get("role_check_quote") or "—"
+            lines += [f"（此席已被 role_check 判定離題，不計票｜原因：{rc_reason}｜引用角色卡條款：「{rc_quote}」）", ""]
         lines += [s.get("report") or "（無報告）", "", "---", ""]
     lines += ["## 完整稽核表", "", table_md]
     return "\n".join(lines) + "\n"
@@ -766,8 +846,14 @@ def _words(text):
     return {w.lower() for w in _WORD_RE.findall(text) if re.search(r"[A-Za-z]", w)}
 
 
-def compute_anchoring(brief, seats, fixed_text=""):
-    fixed_text = unicodedata.normalize("NFKC", fixed_text or "")
+ANCHOR_STOPWORDS = (
+    "使用者採用預設 解決的核心問題 最大可承受 不可逾越的禁區 已評估並排除 "
+    "資料中未記載原因 未表達傾向 維持現狀 主要考量 明確目標 現有資源與約束"
+)
+
+
+def compute_anchoring(brief, seats, fixed_text="", max_terms=ANCHOR_MAX_TERMS):
+    fixed_text = unicodedata.normalize("NFKC", (fixed_text or "") + "\n" + ANCHOR_STOPWORDS)
     fixed_words = _words(fixed_text)
     b = unicodedata.normalize("NFKC", brief or "")
     brief_cjk = {t for t in _cjk_grams(b) if t not in fixed_text}
@@ -783,7 +869,7 @@ def compute_anchoring(brief, seats, fixed_text=""):
     kept = {t: sv for t, sv in cand.items()
             if not any(len(o) > len(t) and sv == osv and t in o for o, osv in cand.items())}
     ordered = sorted(kept.items(), key=lambda kv: (-len(kv[1]), -len(kv[0]), kv[0]))
-    return [{"term": t, "seats": list(sv)} for t, sv in ordered[:ANCHOR_MAX_TERMS]]
+    return [{"term": t, "seats": list(sv)} for t, sv in ordered[:max_terms]]
 
 
 def anchoring_markdown(terms):
@@ -807,9 +893,26 @@ def values_markdown(values):
     return "\n".join(lines)
 
 
+def load_council_config(skill, run, explicit_config=None):
+    """讀取並驗證 .council/config.json（若存在）。回傳 (cfg_or_None, errors_list)。"""
+    cfg_p = init_council.config_path_for(run_dir=run, explicit_config=explicit_config)
+    if not cfg_p.is_file():
+        if explicit_config:
+            return None, [f"找不到指定的 config.json：{cfg_p}"]
+        return None, []
+    try:
+        cfg = json.loads(cfg_p.read_text(encoding="utf-8"))
+    except Exception as e:
+        return None, [f"無法解析 config.json（{cfg_p}）：{e!r}"]
+    errs = [f"config.json：{e}" for e in init_council.validate_config(cfg, skill)]
+    return cfg, errs
+
+
 def main():
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
+    if hasattr(sys.stderr, "reconfigure"):
+        sys.stderr.reconfigure(encoding="utf-8")
     ap = argparse.ArgumentParser()
     ap.add_argument("--skill-dir", required=True)
     ap.add_argument("--run-dir", required=True)
@@ -823,6 +926,8 @@ def main():
                     help="agy brain 資料夾（可重複）；預設 ~/.gemini/antigravity/brain 與 ~/.gemini/antigravity-cli/brain")
     ap.add_argument("--char-limit", type=int, default=None, metavar="N",
                     help="覆寫一般席位的字數上限（預設 %d）；席位 5 依 1500/1200 比例放寬。超過只記警告" % CHAR_LIMIT_DEFAULT)
+    ap.add_argument("--config", default=None,
+                    help="指定 .council/config.json 路徑；未指定時自動檢查 <run-dir>/../../config.json")
     ap.add_argument("--char-limit-seat5", type=int, default=None, metavar="M",
                     help="直接指定席位 5 的字數上限（優先於 --char-limit 的比例放寬）")
     a = ap.parse_args()
@@ -831,6 +936,10 @@ def main():
     skill, run = Path(a.skill_dir), Path(a.run_dir)
     if a.check_plan:
         sys.exit(run_check_plan(run))
+    council_cfg, council_cfg_errors = load_council_config(skill, run, a.config)
+    cfg_bdirs = (council_cfg or {}).get("brain_dirs")
+    raw_bdirs = a.brain_dir or (cfg_bdirs if isinstance(cfg_bdirs, list) and cfg_bdirs else DEFAULT_BRAIN_DIRS)
+    brain_dirs = [os.path.expanduser(d) for d in raw_bdirs]
 
     brief = norm((run / "brief.md").read_text(encoding="utf-8"))
     schema = norm((skill / "schemas" / "subagent_output.md").read_text(encoding="utf-8"))
@@ -842,19 +951,41 @@ def main():
 
     cfg = json.loads((run / "seats.json").read_text(encoding="utf-8"))
     rows, missing, cfg_errors = validate_seats_config(cfg)
+    cfg_errors = council_cfg_errors + cfg_errors
+    seat_models_cfg = (council_cfg or {}).get("seat_models")
+    if not isinstance(seat_models_cfg, dict):
+        seat_models_cfg = {}
+    declared_models = {
+        s["seat"]: str(s["model"]).strip()
+        for s in rows
+        if isinstance(s.get("model"), str) and s.get("model").strip()
+    }
+    if declared_models:
+        cfg_errors.extend(init_council.check_pair_symmetry(declared_models))
+    platform = (council_cfg or {}).get("platform") or "agy"
+    adapter = None
+    if platform != "agy":
+        try:
+            adapter = get_adapter(platform)
+        except TranscriptFormatError as e:
+            cfg_errors.append(str(e))
     menu = load_menu(skill)
     seats = []
     for s in rows:
         try:
+
+            exp_m = seat_models_cfg.get(str(s["seat"])) or seat_models_cfg.get(s["seat"])
             seats.append(audit_seat(s, cfg.get("parent_id"), brief, roles, schema, menu, cfg_errors,
-                                    brain_dirs, char_limits))
+
+                                    brain_dirs, char_limits, expected_model=exp_m, adapter=adapter))
         except Exception as e:      # 單席問題只影響該席，不讓整批稽核中斷
             row = new_row(s.get("seat"), s.get("conversation_id"), s.get("retry") not in (None, False))
             row["verdict"] = "未稽核"
             row["isolation"].append(f"稽核該席時發生例外：{e!r}")
             seats.append(row)
     for n in missing:
-        seats.append(absent_row(n, "seats.json 中沒有這一席的執行紀錄"))
+        seats.append(absent_row(n, "seats.json 中沒有這一席的執行紀錄",
+                                model=seat_models_cfg.get(str(n)) or seat_models_cfg.get(n)))
     seats.sort(key=lambda x: x["seat"])
     agg = aggregate(seats)
 
@@ -876,15 +1007,23 @@ def main():
         brief_tpl = norm((skill / "templates" / "baseline_brief.md").read_text(encoding="utf-8"))
     except OSError:
         brief_tpl = ""
-    fixed_text = "\n".join(list(roles.values()) + [schema, brief_tpl])
+    try:
+        preset_tpl = norm((skill / "templates" / "preset_menu.md").read_text(encoding="utf-8"))
+    except OSError:
+        preset_tpl = ""
+    fixed_text = "\n".join(list(roles.values()) + [schema, brief_tpl, preset_tpl])
+    stance_p = run / "stance_record.md"
+    stance_summary = summarize_stance_record(stance_p.read_text(encoding="utf-8")) if stance_p.is_file() else None
     payload = {"seats": seats, "aggregate": agg, "config_errors": cfg_errors,
                "anchoring_terms": compute_anchoring(brief, seats, fixed_text), "unsourced_numbers": []}
+    if stance_summary is not None:
+        payload["stance_summary"] = stance_summary
     if a.list_values:
         payload["reported_values"] = collect_values(seats)
     (run / "audit.json").write_text(
         json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     table_md = to_markdown(seats, agg, residual_note) + anchoring_markdown(payload["anchoring_terms"])
-    (run / "summary.md").write_text(build_summary(seats, roles, table_md), encoding="utf-8")
+    (run / "summary.md").write_text(build_summary(seats, roles, table_md, stance_summary), encoding="utf-8")
     (run / "report_full.md").write_text(build_report_full(seats, roles, table_md), encoding="utf-8")
     print(table_md)
     if a.list_values:
